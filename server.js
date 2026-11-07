@@ -8,6 +8,7 @@ const multer = require('multer');
 const qrcode = require('qrcode');
 
 const motor = require('./motor');
+const { webmParaOgg, ehWebm } = require('./audio-ogg');
 const db = require('./db');
 
 const app = express();
@@ -64,9 +65,19 @@ app.post('/api/conversas/:jid/midia', upload.single('arquivo'), async (req, res)
       return res.status(400).json({ erro: 'Nenhum arquivo enviado' });
     }
 
-    const mimetype = req.file.mimetype;
+    let mimetype = req.file.mimetype;
     const tipoForcado = req.body.tipo; // frontend pode forçar 'sticker' ou 'audio' (ptt)
     const tipoMensagem = tipoForcado || detectarTipoPorMimetype(mimetype);
+
+    // Mensagem de voz gravada no app vem em WebM; o WhatsApp exige OGG/Opus
+    // pra tocar em todos os aparelhos, então trocamos o container aqui.
+    if (tipoMensagem === 'audio') {
+      const bruto = fs.readFileSync(arquivoTemp);
+      if (ehWebm(bruto)) {
+        fs.writeFileSync(arquivoTemp, webmParaOgg(bruto));
+        mimetype = 'audio/ogg; codecs=opus';
+      }
+    }
     const legenda = req.body.legenda || '';
 
     await motor.enviarMidia(jid, {
@@ -117,8 +128,9 @@ app.get('/api/eventos', (req, res) => {
   });
 });
 
-app.listen(PORTA, () => {
-  console.log(`\n🚀 Chat Slim rodando! Abra no navegador: http://localhost:${PORTA}\n`);
+// só aceita conexões do próprio celular (ninguém da mesma rede Wi-Fi acessa)
+app.listen(PORTA, '127.0.0.1', () => {
+  console.log(`\n🚀 Chat Slim rodando! Abra no navegador: http://127.0.0.1:${PORTA}\n`);
 });
 
 motor.iniciar().catch((err) => {

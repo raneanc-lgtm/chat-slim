@@ -562,7 +562,8 @@ async function alternarGravacaoAudio() {
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    gravador = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    const tipoGravacao = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    gravador = new MediaRecorder(stream, { mimeType: tipoGravacao });
     pedacosAudio = [];
 
     gravador.ondataavailable = (ev) => pedacosAudio.push(ev.data);

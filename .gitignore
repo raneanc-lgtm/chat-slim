@@ -1,0 +1,11 @@
+node_modules/
+dados/
+auth_info/
+android/app/libnode/
+android/app/src/main/assets/nodejs-project/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+*.apk

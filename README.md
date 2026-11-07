@@ -1,10 +1,11 @@
 # Chat Slim — Projeto Android (Slim Creative)
 
 Cliente próprio de WhatsApp. Motor Node.js (Baileys + Express) embarcado
-dentro do APK via nodejs-mobile; interface web (HTML/CSS/JS) rodando numa
-WebView que aponta para `http://localhost:3000` (o próprio motor, local
-no celular, sem depender de internet externa além da conexão com o
-WhatsApp).
+dentro do APK via nodejs-mobile (Node 18 para Android, ponte JNI própria em
+`android/app/src/main/cpp`), e a interface web rodando numa WebView nativa
+que aponta para `http://127.0.0.1:3000` (servidor local, só acessível pelo
+próprio celular). Um serviço em primeiro plano mantém a conexão viva com o
+app minimizado.
 
 ## Por que o APK não foi gerado direto por mim
 
@@ -31,15 +32,12 @@ num ambiente sem essa restrição.
 
 ## Estrutura
 
-- `android/` — projeto Android (Capacitor + nodejs-mobile)
-  - `app/src/main/assets/nodejs-project/` — o motor Node.js embarcado
-    (cópia de `server.js`, `motor.js`, `db.js`, `public/`)
-  - `app/src/main/java/.../MainActivity.java` — inicia o Node embarcado
-    e aponta a WebView pra ele
-  - `app/src/main/AndroidManifest.xml` — permissões (internet,
-    microfone, câmera, mídia)
-  - ícone do app já gerado em todos os tamanhos (`mipmap-*`)
-- `.github/workflows/build-apk.yml` — build automático
+- `server.js`, `motor.js`, `db.js`, `audio-ogg.js`, `public/` — o motor e a interface
+- `motor-entry.js` + `scripts/build-motor.js` — empacotam o motor num único
+  `main.js` compatível com o Node 18 do Android (gerado no build, não versionado)
+- `android/` — app Android nativo (WebView + serviço + ponte JNI pro Node)
+- `.github/workflows/build-apk.yml` — build automático (baixa o nodejs-mobile,
+  empacota o motor e compila o APK)
 
 ## O que já funciona (validado via Termux antes de empacotar)
 

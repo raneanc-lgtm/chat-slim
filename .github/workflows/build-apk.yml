@@ -23,14 +23,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Instalar dependências do motor embarcado (nodejs-project)
-        working-directory: android/app/src/main/assets/nodejs-project
-        run: npm install --omit=dev
+      - name: Instalar dependências do motor
+        run: npm ci
+
+      - name: Empacotar o motor (Baileys + servidor) para o Android
+        run: npm run build:motor
+
+      - name: Baixar o Node.js para Android (nodejs-mobile 18.20.4)
+        run: |
+          mkdir -p /tmp/nodejs-mobile
+          cd /tmp/nodejs-mobile
+          npm pack nodejs-mobile-react-native@18.20.4
+          tar xzf nodejs-mobile-react-native-18.20.4.tgz package/android/libnode
+          mkdir -p "$GITHUB_WORKSPACE/android/app/libnode"
+          cp -r package/android/libnode/bin package/android/libnode/include "$GITHUB_WORKSPACE/android/app/libnode/"
+          ls -la "$GITHUB_WORKSPACE/android/app/libnode/bin/"*
 
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.0.12077973 cmake;3.22.1'
 
       - name: Dar permissão de execução ao gradlew
         working-directory: android
@@ -40,9 +52,12 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Renomear APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk ChatSlim.apk
+
       - name: Enviar APK como artefato do build
         uses: actions/upload-artifact@v4
         with:
-          name: chat-slim-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: ChatSlim-apk
+          path: ChatSlim.apk
           retention-days: 30
