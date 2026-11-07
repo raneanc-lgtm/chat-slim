@@ -1,0 +1,48 @@
+name: Teste Radinho master no emulador
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  teste:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar APKs de teste (branch teste-radinho)
+        run: |
+          git fetch --depth 1 origin teste-radinho
+          mkdir -p teste
+          git --work-tree=teste checkout origin/teste-radinho -- .
+          ls -la teste
+
+      - name: Habilitar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Rodar no emulador
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash scripts/teste-radinho.sh
+
+      - name: Publicar resultado (branch teste-resultado)
+        if: always()
+        run: |
+          cd resultado
+          git init -q -b teste-resultado
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Resultado do teste"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" teste-resultado
