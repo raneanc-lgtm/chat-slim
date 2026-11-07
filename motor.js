@@ -244,6 +244,20 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
   return resultado;
 }
 
+// Conexão pelo número de telefone (pra quando o WhatsApp está no mesmo celular
+// e não dá pra escanear o QR): gera o código de 8 letras que a pessoa digita em
+// WhatsApp → Aparelhos conectados → Conectar aparelho → Conectar com número de telefone.
+async function pedirCodigoPareamento(numero) {
+  if (statusConexao === 'conectado') throw new Error('Já está conectado');
+  if (!socketAtual || statusConexao !== 'aguardando_qr') {
+    throw new Error('O motor ainda está conectando no WhatsApp. Espera uns segundos e tenta de novo.');
+  }
+  const codigo = await socketAtual.requestPairingCode(numero);
+  if (!codigo) throw new Error('O WhatsApp não devolveu o código. Tenta de novo.');
+  const limpo = String(codigo).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  return limpo.length === 8 ? `${limpo.slice(0, 4)}-${limpo.slice(4)}` : limpo;
+}
+
 async function enviarMensagem(jid, texto) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
@@ -279,6 +293,7 @@ module.exports = {
   onEvento,
   enviarMensagem,
   enviarMidia,
+  pedirCodigoPareamento,
   getStatus: () => statusConexao,
   getQR: () => ultimoQR,
 };

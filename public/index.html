@@ -235,7 +235,7 @@
     <div id="lista-conversas"></div>
   </div>
 
-  <div id="chat-area">
+  <div id="chat-area" class="escondida">
     <div id="chat-vazio">Selecione uma conversa para começar<br><small style="opacity:.6">Chat Slim — by Slim Creative</small></div>
     <div id="chat-topo">
       <button id="btn-voltar" onclick="voltarParaLista()">←</button>
@@ -277,7 +277,7 @@ async function carregarStatus() {
     badge.textContent = 'conectado';
     badge.classList.add('conectado');
   } else if (data.status === 'aguardando_qr' && data.qrImagem) {
-    badge.textContent = 'escaneie o QR';
+    badge.textContent = 'conectar';
     mostrarQR(data.qrImagem);
   } else {
     badge.textContent = 'conectando...';
@@ -286,11 +286,53 @@ async function carregarStatus() {
 
 function mostrarQR(imagemBase64) {
   const lista = document.getElementById('lista-conversas');
-  if (document.getElementById('qr-wrapper')) return;
-  lista.innerHTML = `<div id="qr-wrapper" style="padding:24px;text-align:center;">
-    <p style="margin-bottom:12px;color:var(--texto-fraco);font-size:13px;">Escaneie com o WhatsApp:<br>Aparelhos conectados → Conectar aparelho</p>
-    <img src="${imagemBase64}" style="width:100%;max-width:260px;border-radius:8px;" />
+  const imgExistente = document.getElementById('qr-img');
+  if (imgExistente) { imgExistente.src = imagemBase64; return; } // o QR muda a cada ~20s
+  let numeroSalvo = '';
+  try { numeroSalvo = localStorage.getItem('chatslim_numero') || ''; } catch (_) {}
+  lista.innerHTML = `<div id="qr-wrapper" style="padding:20px 16px;text-align:center;">
+    <div style="background:var(--bg-2,#17212b);border-radius:12px;padding:16px;margin-bottom:18px;text-align:left;">
+      <div style="font-weight:700;margin-bottom:6px;">📱 WhatsApp neste mesmo celular?</div>
+      <div style="color:var(--texto-fraco);font-size:13px;margin-bottom:10px;">Conecte pelo número: digite seu número com DDD e toque em Gerar código.</div>
+      <input id="num-pareamento" type="tel" inputmode="tel" placeholder="31 99999-9999" value="${numeroSalvo}"
+        style="width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid #2b3a4a;background:#0e1621;color:#fff;font-size:16px;margin-bottom:10px;">
+      <button id="btn-pareamento" onclick="gerarCodigoPareamento()"
+        style="width:100%;padding:12px;border:0;border-radius:8px;background:var(--destaque,#6c5ce7);color:#fff;font-weight:700;font-size:15px;">Gerar código</button>
+      <div id="resultado-pareamento" style="margin-top:12px;"></div>
+    </div>
+    <p style="margin-bottom:12px;color:var(--texto-fraco);font-size:13px;">Ou escaneie de outro aparelho:<br>Aparelhos conectados → Conectar aparelho</p>
+    <img id="qr-img" src="${imagemBase64}" style="width:100%;max-width:240px;border-radius:8px;background:#fff;padding:8px;box-sizing:border-box;" />
   </div>`;
+}
+
+async function gerarCodigoPareamento() {
+  const campo = document.getElementById('num-pareamento');
+  const botao = document.getElementById('btn-pareamento');
+  const saida = document.getElementById('resultado-pareamento');
+  const numero = campo.value.trim();
+  if (!numero) { saida.innerHTML = '<span style="color:#ff7675">Digite o número.</span>'; return; }
+  try { localStorage.setItem('chatslim_numero', numero); } catch (_) {}
+  botao.disabled = true; botao.textContent = 'Gerando...';
+  saida.innerHTML = '';
+  try {
+    const r = await fetch('/api/pareamento', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numero }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.erro || 'Falhou');
+    saida.innerHTML = `
+      <div style="font-size:30px;font-weight:800;letter-spacing:4px;font-family:monospace;text-align:center;padding:10px;background:#0e1621;border-radius:8px;user-select:all;">${d.codigo}</div>
+      <ol style="font-size:13px;color:var(--texto-fraco);padding-left:18px;margin:10px 0 0;line-height:1.6;">
+        <li>Abra o <b>WhatsApp</b> → ⋮ → <b>Aparelhos conectados</b></li>
+        <li>Toque em <b>Conectar aparelho</b></li>
+        <li>Embaixo, toque em <b>Conectar com número de telefone</b></li>
+        <li>Digite o código acima</li>
+      </ol>`;
+    botao.textContent = 'Gerar outro código';
+  } catch (e) {
+    saida.innerHTML = '<span style="color:#ff7675">' + e.message + '</span>';
+    botao.textContent = 'Gerar código';
+  } finally {
+    botao.disabled = false;
+  }
 }
 
 function formatarHora(ts) {

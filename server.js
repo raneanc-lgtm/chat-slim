@@ -99,6 +99,22 @@ app.post('/api/conversas/:jid/midia', upload.single('arquivo'), async (req, res)
   }
 });
 
+// Conectar pelo número de telefone (código de pareamento)
+app.post('/api/pareamento', async (req, res) => {
+  try {
+    let numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
+    if (numero.length === 10 || numero.length === 11) numero = '55' + numero; // número BR sem o 55
+    if (numero.length < 12 || numero.length > 15) {
+      return res.status(400).json({ erro: 'Número inválido. Use DDD + número, ex: 31 99999-9999' });
+    }
+    const codigo = await motor.pedirCodigoPareamento(numero);
+    res.json({ codigo });
+  } catch (err) {
+    console.error('Erro no código de pareamento:', err.message);
+    res.status(500).json({ erro: err.message });
+  }
+});
+
 // Status da conexão + QR code (como imagem base64)
 app.get('/api/status', async (req, res) => {
   const status = motor.getStatus();
