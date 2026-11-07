@@ -15,6 +15,20 @@ const util = require('util');
   } catch (_) {}
 })();
 
+// ---- Pasta temporária ----
+// O Baileys grava arquivos temporários ao enviar mídia (foto, vídeo, áudio). No Android
+// o /tmp do sistema não pode ser usado pelo app, então forçamos a pasta de cache do app.
+(function corrigirPastaTemporaria() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const base = process.env.TMPDIR || (process.env.NODEJS_MOBILE_APP_STORAGE && path.join(process.env.NODEJS_MOBILE_APP_STORAGE, 'tmp'));
+  if (!base) return;
+  try { fs.mkdirSync(base, { recursive: true }); } catch (_) {}
+  process.env.TMPDIR = base;
+  os.tmpdir = () => base;
+})();
+
 // ---- Log em arquivo (o app mostra esse log na tela se o motor não subir) ----
 const BASE = process.env.NODEJS_MOBILE_APP_STORAGE || __dirname;
 const ARQ_LOG = path.join(BASE, 'motor.log');
@@ -41,7 +55,7 @@ for (const [metodo, nivel] of [['log', 'INFO'], ['info', 'INFO'], ['warn', 'AVIS
 process.on('uncaughtException', (err) => console.error('Erro não tratado:', err && err.stack ? err.stack : err));
 process.on('unhandledRejection', (err) => console.error('Promessa rejeitada sem tratamento:', err && err.stack ? err.stack : err));
 
-console.log(`Motor iniciando — Node ${process.version} ${process.platform}/${process.arch} icu=${process.versions.icu || 'nenhum'} porta=${process.env.CHATSLIM_PORTA || 3000}`);
+console.log(`Motor iniciando — Node ${process.version} ${process.platform}/${process.arch} icu=${process.versions.icu || 'nenhum'} porta=${process.env.CHATSLIM_PORTA || 3000} tmp=${require('os').tmpdir()}`);
 try {
   new RegExp('\\p{L}', 'u');
   console.log('Regex Unicode (\\p{...}): OK');
