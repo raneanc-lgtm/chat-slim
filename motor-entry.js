@@ -3,6 +3,18 @@ const fs = require('fs');
 const path = require('path');
 const util = require('util');
 
+// ---- Configuração vinda do app Android pela linha de comando ----
+// (mais confiável que variável de ambiente: chega igual em qualquer aparelho)
+//   node main.js --chatslim-config '{"NODEJS_MOBILE_APP_STORAGE":"...","CHATSLIM_PORTA":"3010",...}'
+(function lerConfigDaLinhaDeComando() {
+  const i = process.argv.indexOf('--chatslim-config');
+  if (i < 0 || !process.argv[i + 1]) return;
+  try {
+    const cfg = JSON.parse(process.argv[i + 1]);
+    for (const [k, v] of Object.entries(cfg)) process.env[k] = String(v);
+  } catch (_) {}
+})();
+
 // ---- Log em arquivo (o app mostra esse log na tela se o motor não subir) ----
 const BASE = process.env.NODEJS_MOBILE_APP_STORAGE || __dirname;
 const ARQ_LOG = path.join(BASE, 'motor.log');
@@ -29,7 +41,7 @@ for (const [metodo, nivel] of [['log', 'INFO'], ['info', 'INFO'], ['warn', 'AVIS
 process.on('uncaughtException', (err) => console.error('Erro não tratado:', err && err.stack ? err.stack : err));
 process.on('unhandledRejection', (err) => console.error('Promessa rejeitada sem tratamento:', err && err.stack ? err.stack : err));
 
-console.log(`Motor iniciando — Node ${process.version} ${process.platform}/${process.arch} icu=${process.versions.icu || 'nenhum'}`);
+console.log(`Motor iniciando — Node ${process.version} ${process.platform}/${process.arch} icu=${process.versions.icu || 'nenhum'} porta=${process.env.CHATSLIM_PORTA || 3000}`);
 try {
   new RegExp('\\p{L}', 'u');
   console.log('Regex Unicode (\\p{...}): OK');

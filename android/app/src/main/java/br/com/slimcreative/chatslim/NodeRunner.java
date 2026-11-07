@@ -45,8 +45,16 @@ public final class NodeRunner {
                 Os.setenv("HOME", app.getFilesDir().getAbsolutePath(), true);
                 Os.setenv("CHATSLIM_PORTA", String.valueOf(Config.porta(app)), true);
 
+                // a mesma configuração vai também pela linha de comando (há aparelhos/emuladores
+                // em que o Node não enxerga o setenv feito pelo Java)
+                org.json.JSONObject cfg = new org.json.JSONObject();
+                cfg.put("NODEJS_MOBILE_APP_STORAGE", app.getFilesDir().getAbsolutePath());
+                cfg.put("TMPDIR", app.getCacheDir().getAbsolutePath());
+                cfg.put("HOME", app.getFilesDir().getAbsolutePath());
+                cfg.put("CHATSLIM_PORTA", String.valueOf(Config.porta(app)));
+
                 String principal = new File(destino, "main.js").getAbsolutePath();
-                int codigo = startNode(new String[]{"node", principal});
+                int codigo = startNode(new String[]{"node", principal, "--chatslim-config", cfg.toString()});
                 Log.e(TAG, "Node encerrou com código " + codigo);
                 ChatSlimApp.registrar(app, "crash-motor.txt", "O motor Node parou",
                         new RuntimeException("node::Start retornou " + codigo));

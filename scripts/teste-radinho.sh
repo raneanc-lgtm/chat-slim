@@ -30,13 +30,11 @@ adb forward tcp:3010 tcp:3010
 curl -s -m 5 http://127.0.0.1:3010/api/status | head -c 120; echo
 echo "===== motor.log ====="
 adb shell run-as $PKG cat files/motor.log
+adb shell run-as $PKG ls files
 adb shell run-as $PKG cat files/crash-motor.txt 2>/dev/null
 adb shell run-as $PKG ls -la files files/nodejs-project 2>&1 | head -20
 echo "--- motor.log dentro de nodejs-project ---"
 adb shell run-as $PKG cat files/nodejs-project/motor.log
-echo "--- ambiente do processo do motor ---"
-MP=$(adb shell pidof $PKG:motor | tr -d '\r')
-adb shell run-as $PKG sh -c "cat /proc/$MP/environ | tr '\\0' '\\n'" | grep -E "NODEJS|CHATSLIM|TMPDIR|HOME" 
 echo "--- porta 3000 ---"
 adb forward tcp:3000 tcp:3000
 curl -s -m 5 http://127.0.0.1:3000/api/status | head -c 120; echo
