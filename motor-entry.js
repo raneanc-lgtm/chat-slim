@@ -29,14 +29,22 @@ for (const [metodo, nivel] of [['log', 'INFO'], ['info', 'INFO'], ['warn', 'AVIS
 process.on('uncaughtException', (err) => console.error('Erro não tratado:', err && err.stack ? err.stack : err));
 process.on('unhandledRejection', (err) => console.error('Promessa rejeitada sem tratamento:', err && err.stack ? err.stack : err));
 
-console.log(`Motor iniciando — Node ${process.version} ${process.platform}/${process.arch}`);
+console.log(`Motor iniciando — Node ${process.version} ${process.platform}/${process.arch} icu=${process.versions.icu || 'nenhum'}`);
+try {
+  new RegExp('\\p{L}', 'u');
+  console.log('Regex Unicode (\\p{...}): OK');
+} catch (e) {
+  console.log('Regex Unicode (\\p{...}) indisponível: ' + e.message);
+}
 
 // O Node embarcado no Android (nodejs-mobile) é a versão 18, que não expõe
 // globalThis.crypto por padrão — o Baileys precisa dele.
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
 
 try {
-  require('./server');
+  // app.js = servidor + Baileys empacotados (gerado pelo scripts/build-motor.js).
+  // Fica num arquivo separado pra que até erro de sintaxe dele caia aqui e vá pro log.
+  require('./app.js');
 } catch (err) {
   console.error('Falha ao carregar o servidor:', err && err.stack ? err.stack : err);
 }

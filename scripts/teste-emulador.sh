@@ -6,7 +6,7 @@ set -x
 adb install -r -g "$APK"
 adb logcat -c
 adb shell am start -W -n $PKG/.MainActivity
-sleep 75
+sleep 90
 set +x
 echo "===== PROCESSOS ====="
 adb shell pidof $PKG && echo "UI: VIVO" || echo "UI: MORREU"
