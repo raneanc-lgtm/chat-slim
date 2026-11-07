@@ -129,6 +129,23 @@ app.post('/api/conversas/:jid/apagar', async (req, res) => {
   }
 });
 
+// Contatos pra nova conversa
+app.get('/api/contatos', (req, res) => {
+  res.json(db.listarContatos());
+});
+
+// Verifica se um número tem WhatsApp
+app.post('/api/numero', async (req, res) => {
+  try {
+    let numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
+    if (numero.length === 10 || numero.length === 11) numero = '55' + numero;
+    if (numero.length < 12 || numero.length > 15) return res.status(400).json({ erro: 'Número inválido. Use DDD + número.' });
+    res.json(await motor.verificarNumero(numero));
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
 // Status (stories) das últimas 24h, agrupados por contato
 app.get('/api/status-contatos', (req, res) => {
   res.json(db.listarStatus());

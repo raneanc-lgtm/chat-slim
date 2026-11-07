@@ -384,6 +384,7 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
   }
+  db.upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') });
 
   const buffer = fs.readFileSync(caminhoArquivo);
   let conteudo;
@@ -452,6 +453,15 @@ async function assinarPresenca(jid) {
   } catch (_) {}
 }
 
+// Confere se um número tem WhatsApp (pra iniciar conversa nova)
+async function verificarNumero(numero) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  const [r] = (await socketAtual.onWhatsApp(numero)) || [];
+  if (!r || !r.exists) return { existe: false };
+  const jid = await paraNumero(r.jid, r.jid);
+  return { existe: true, jid: jid.endsWith('@lid') ? numero + '@s.whatsapp.net' : jid };
+}
+
 async function apagarConversa(jid) {
   const ult = db.ultimaMensagem(jid);
   let noWhatsApp = false;
@@ -485,6 +495,7 @@ async function enviarMensagem(jid, texto) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
   }
+  db.upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') }); // conversa nova (iniciada por mim)
   const resultado = await socketAtual.sendMessage(jid, { text: texto });
   if (!resultado?.key?.id) {
     throw new Error('Mensagem não foi confirmada pelo servidor do WhatsApp');
@@ -519,6 +530,7 @@ module.exports = {
   pedirCodigoPareamento,
   assinarPresenca,
   apagarConversa,
+  verificarNumero,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
   getQR: () => ultimoQR,

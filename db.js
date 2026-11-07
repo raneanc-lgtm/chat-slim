@@ -156,6 +156,14 @@ function unificarLid(lid, pn) {
     .forEach((x) => db.get('status').find({ id: x.id }).assign({ autor_jid: pn }).write());
 }
 
+// ---- Contatos pra iniciar conversa (só os que têm número e nome) ----
+function listarContatos() {
+  return db.get('contatos').value()
+    .filter((c) => c.jid && c.jid.endsWith('@s.whatsapp.net') && (c.nome_agenda || c.nome_perfil || c.nome))
+    .map((c) => ({ jid: c.jid, nome: c.nome_agenda || c.nome_perfil || c.nome, agenda: !!c.nome_agenda, numero: formatarNumero(c.jid) }))
+    .sort((a, b) => (b.agenda - a.agenda) || a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
 // ---- Apagar conversa ----
 function ultimaMensagem(jid) {
   return db.get('mensagens').filter({ conversa_jid: jid }).orderBy(['timestamp'], ['desc']).head().value();
@@ -272,6 +280,7 @@ module.exports = {
   unificarLid,
   ultimaMensagem,
   apagarConversa,
+  listarContatos,
   salvarStatus,
   listarStatus,
   salvarMensagem,
