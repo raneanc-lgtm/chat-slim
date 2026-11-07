@@ -1,0 +1,46 @@
+name: Build Chat Slim APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências do motor embarcado (nodejs-project)
+        working-directory: android/app/src/main/assets/nodejs-project
+        run: npm install --omit=dev
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Dar permissão de execução ao gradlew
+        working-directory: android
+        run: chmod +x gradlew
+
+      - name: Compilar APK (debug)
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Enviar APK como artefato do build
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-slim-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30

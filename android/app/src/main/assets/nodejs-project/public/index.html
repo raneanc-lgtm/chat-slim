@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat Slim</title>
+<style>
+  :root {
+    --bg: #0e1621;
+    --painel: #17212b;
+    --painel-claro: #1f2c38;
+    --borda: #2b3a46;
+    --texto: #e8edf1;
+    --texto-fraco: #7d8a96;
+    --destaque: #6c5ce7;
+    --destaque-claro: #a29bfe;
+    --online: #2ecc71;
+    --bolha-mim: #6c5ce7;
+    --bolha-outro: #1f2c38;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--texto);
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    position: fixed;
+    width: 100%;
+  }
+  #app { display: flex; height: 100%; height: 100dvh; }
+
+  /* ---- Barra lateral (lista de conversas) ---- */
+  #sidebar {
+    width: 100%;
+    max-width: 380px;
+    background: var(--painel);
+    border-right: 1px solid var(--borda);
+    display: flex;
+    flex-direction: column;
+  }
+  #topo-sidebar {
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--borda);
+  }
+  #logo {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--destaque);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  #titulo-app { font-weight: 600; font-size: 18px; }
+  #status-badge {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: var(--painel-claro);
+    color: var(--texto-fraco);
+  }
+  #status-badge.conectado { background: rgba(46,204,113,0.15); color: var(--online); }
+
+  #lista-conversas { flex: 1; overflow-y: auto; }
+  .conversa-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--borda);
+  }
+  .conversa-item:hover, .conversa-item.ativa { background: var(--painel-claro); }
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: var(--painel-claro);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; flex-shrink: 0;
+    position: relative;
+  }
+  .avatar .bolinha-online {
+    position: absolute; bottom: -1px; right: -1px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--online); border: 2px solid var(--painel);
+    display: none;
+  }
+  .avatar .bolinha-online.ativa { display: block; }
+  .conversa-info { flex: 1; min-width: 0; }
+  .conversa-nome { font-weight: 500; font-size: 15px; }
+  .conversa-preview {
+    font-size: 13px; color: var(--texto-fraco);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ---- Área de chat ---- */
+  #chat-area { flex: 1; display: flex; flex-direction: column; }
+  #chat-vazio {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--texto-fraco); font-size: 15px; text-align: center; padding: 20px;
+  }
+  #chat-topo {
+    display: none;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--borda);
+    align-items: center; gap: 12px;
+    background: var(--painel);
+  }
+  #chat-topo-nome { font-weight: 600; }
+  #chat-topo-status { font-size: 12px; color: var(--texto-fraco); }
+  #chat-topo-status.online { color: var(--online); }
+
+  #mensagens { flex: 1; overflow-y: auto; padding: 20px; display: none; flex-direction: column; gap: 8px; }
+  .bolha {
+    max-width: 65%;
+    padding: 9px 13px;
+    border-radius: 14px;
+    font-size: 14px;
+    line-height: 1.4;
+    word-wrap: break-word;
+  }
+  .bolha.mim { align-self: flex-end; background: var(--bolha-mim); border-bottom-right-radius: 4px; }
+  .bolha.outro { align-self: flex-start; background: var(--bolha-outro); border-bottom-left-radius: 4px; }
+  .bolha.apagada { opacity: 0.6; font-style: italic; }
+  .bolha .tarja-apagada {
+    font-size: 11px; color: #ffb86c; margin-bottom: 3px; display: block;
+  }
+  .bolha img, .bolha video { max-width: 100%; border-radius: 8px; margin-top: 4px; }
+  .bolha-hora { font-size: 10px; color: rgba(255,255,255,0.5); margin-top: 4px; text-align: right; }
+
+  #rodape-chat {
+    display: none;
+    padding: 10px 12px;
+    border-top: 1px solid var(--borda);
+    background: var(--painel);
+    gap: 8px;
+    align-items: flex-end;
+  }
+  #campo-mensagem {
+    flex: 1;
+    background: var(--painel-claro);
+    border: 1px solid var(--borda);
+    border-radius: 20px;
+    padding: 11px 16px;
+    color: var(--texto);
+    font-size: 15px;
+    resize: none;
+    max-height: 100px;
+    font-family: inherit;
+  }
+  #campo-mensagem:focus { outline: none; border-color: var(--destaque); }
+  #btn-enviar {
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--destaque);
+    border: none; color: white; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0;
+  }
+  #btn-enviar:active { background: var(--destaque-claro); }
+  #btn-enviar:disabled { opacity: 0.4; }
+  #btn-enviar.gravando { background: #e74c3c; }
+
+  .btn-icone {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: none; border: none; color: var(--texto-fraco);
+    font-size: 20px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .btn-icone:active { background: var(--painel-claro); }
+
+  #input-arquivo { display: none; }
+
+  #preview-anexo {
+    display: none;
+    padding: 10px 12px;
+    background: var(--painel-claro);
+    border-top: 1px solid var(--borda);
+    align-items: center; gap: 10px;
+  }
+  #preview-anexo img, #preview-anexo video { max-height: 60px; border-radius: 6px; }
+  #preview-anexo-nome { flex: 1; font-size: 13px; color: var(--texto-fraco); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #preview-anexo-cancelar { background: none; border: none; color: var(--texto-fraco); font-size: 18px; cursor: pointer; }
+
+  .bolha audio { width: 220px; max-width: 100%; }
+  .bolha a.documento-link {
+    display: flex; align-items: center; gap: 8px;
+    color: inherit; text-decoration: none;
+    background: rgba(255,255,255,0.08); padding: 8px; border-radius: 8px;
+  }
+
+  #painel-emoji {
+    display: none;
+    position: absolute;
+    bottom: 64px; left: 8px; right: 8px;
+    max-height: 220px; overflow-y: auto;
+    background: var(--painel-claro);
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    padding: 10px;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 4px;
+    z-index: 10;
+  }
+  #painel-emoji.aberto { display: grid; }
+  .emoji-item { font-size: 22px; text-align: center; padding: 4px; cursor: pointer; border-radius: 6px; }
+  .emoji-item:active { background: var(--borda); }
+
+  #btn-voltar {
+    display: none;
+    background: none; border: none; color: var(--texto);
+    font-size: 20px; cursor: pointer; padding: 4px 8px;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--borda); border-radius: 3px; }
+
+  @media (max-width: 760px) {
+    #sidebar { max-width: 100%; }
+    #sidebar.escondida { display: none; }
+    #chat-area.escondida { display: none; }
+    #btn-voltar { display: inline-flex; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="sidebar">
+    <div id="topo-sidebar">
+      <div id="logo">🃏</div>
+      <div id="titulo-app">Chat Slim</div>
+      <div id="status-badge">conectando...</div>
+    </div>
+    <div id="lista-conversas"></div>
+  </div>
+
+  <div id="chat-area">
+    <div id="chat-vazio">Selecione uma conversa para começar<br><small style="opacity:.6">Chat Slim — by Slim Creative</small></div>
+    <div id="chat-topo">
+      <button id="btn-voltar" onclick="voltarParaLista()">←</button>
+      <div class="avatar" id="chat-avatar">?</div>
+      <div>
+        <div id="chat-topo-nome">—</div>
+        <div id="chat-topo-status">—</div>
+      </div>
+    </div>
+    <div id="mensagens"></div>
+
+    <div id="preview-anexo">
+      <div id="preview-anexo-conteudo"></div>
+      <div id="preview-anexo-nome"></div>
+      <button id="preview-anexo-cancelar" onclick="cancelarAnexo()">✕</button>
+    </div>
+
+    <div id="painel-emoji"></div>
+
+    <div id="rodape-chat" style="position: relative;">
+      <button class="btn-icone" onclick="document.getElementById('input-arquivo').click()">📎</button>
+      <button class="btn-icone" onclick="alternarPainelEmoji()">😊</button>
+      <input type="file" id="input-arquivo" accept="image/*,video/*,.pdf,.doc,.docx,.zip,.txt" onchange="selecionarArquivo(event)" />
+      <textarea id="campo-mensagem" placeholder="Escreva uma mensagem" rows="1"></textarea>
+      <button id="btn-enviar" onclick="acaoBotaoEnviar()">➤</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let conversaAtiva = null;
+let presencas = {};
+
+async function carregarStatus() {
+  const res = await fetch('/api/status');
+  const data = await res.json();
+  const badge = document.getElementById('status-badge');
+  if (data.status === 'conectado') {
+    badge.textContent = 'conectado';
+    badge.classList.add('conectado');
+  } else if (data.status === 'aguardando_qr' && data.qrImagem) {
+    badge.textContent = 'escaneie o QR';
+    mostrarQR(data.qrImagem);
+  } else {
+    badge.textContent = 'conectando...';
+  }
+}
+
+function mostrarQR(imagemBase64) {
+  const lista = document.getElementById('lista-conversas');
+  if (document.getElementById('qr-wrapper')) return;
+  lista.innerHTML = `<div id="qr-wrapper" style="padding:24px;text-align:center;">
+    <p style="margin-bottom:12px;color:var(--texto-fraco);font-size:13px;">Escaneie com o WhatsApp:<br>Aparelhos conectados → Conectar aparelho</p>
+    <img src="${imagemBase64}" style="width:100%;max-width:260px;border-radius:8px;" />
+  </div>`;
+}
+
+function formatarHora(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function iniciais(nome) {
+  if (!nome) return '?';
+  return nome.trim().charAt(0).toUpperCase();
+}
+
+async function carregarConversas() {
+  const res = await fetch('/api/conversas');
+  const conversas = await res.json();
+  if (!conversas.length) return;
+
+  const lista = document.getElementById('lista-conversas');
+  lista.innerHTML = '';
+
+  for (const c of conversas) {
+    const div = document.createElement('div');
+    div.className = 'conversa-item' + (conversaAtiva === c.jid ? ' ativa' : '');
+    div.onclick = () => abrirConversa(c.jid, c.nome || c.jid);
+
+    const online = presencas[c.jid] === 'online';
+
+    div.innerHTML = `
+      <div class="avatar">${iniciais(c.nome || c.jid)}<span class="bolinha-online ${online ? 'ativa' : ''}"></span></div>
+      <div class="conversa-info">
+        <div class="conversa-nome">${c.nome || c.jid.split('@')[0]}</div>
+        <div class="conversa-preview">${c.ultima_mensagem_texto || ''}</div>
+      </div>
+    `;
+    lista.appendChild(div);
+  }
+}
+
+async function abrirConversa(jid, nome) {
+  conversaAtiva = jid;
+  document.getElementById('chat-vazio').style.display = 'none';
+  document.getElementById('chat-topo').style.display = 'flex';
+  document.getElementById('mensagens').style.display = 'flex';
+  document.getElementById('rodape-chat').style.display = 'flex';
+  document.getElementById('chat-topo-nome').textContent = nome;
+
+  document.getElementById('sidebar').classList.add('escondida');
+  document.getElementById('chat-area').classList.remove('escondida');
+  document.getElementById('chat-avatar').textContent = iniciais(nome);
+
+  const statusEl = document.getElementById('chat-topo-status');
+  if (presencas[jid] === 'online') {
+    statusEl.textContent = 'online agora';
+    statusEl.classList.add('online');
+  } else {
+    statusEl.textContent = 'offline';
+    statusEl.classList.remove('online');
+  }
+
+  const res = await fetch(`/api/conversas/${encodeURIComponent(jid)}/mensagens`);
+  const mensagens = await res.json();
+  renderizarMensagens(mensagens);
+}
+
+function renderizarMensagens(mensagens) {
+  const container = document.getElementById('mensagens');
+  container.innerHTML = '';
+  for (const m of mensagens) {
+    const bolha = document.createElement('div');
+    bolha.className = 'bolha ' + (m.de_mim ? 'mim' : 'outro') + (m.apagada_pelo_remetente ? ' apagada' : '');
+
+    let conteudoHtml = '';
+    if (m.apagada_pelo_remetente) {
+      conteudoHtml += `<span class="tarja-apagada">🗑️ apagada pelo remetente (mantida aqui)</span>`;
+    }
+    if (m.midia_path) {
+      const mt = m.midia_mimetype || '';
+      if (mt.startsWith('image/')) {
+        conteudoHtml += `<img src="/midia/${m.midia_path}" />`;
+      } else if (mt.startsWith('video/')) {
+        conteudoHtml += `<video src="/midia/${m.midia_path}" controls></video>`;
+      } else if (mt.startsWith('audio/')) {
+        conteudoHtml += `<audio src="/midia/${m.midia_path}" controls></audio>`;
+      } else {
+        conteudoHtml += `<a href="/midia/${m.midia_path}" class="documento-link" target="_blank">📎 <span>arquivo anexado</span></a>`;
+      }
+    }
+    if (m.texto) {
+      conteudoHtml += `<div>${escaparHtml(m.texto)}</div>`;
+    }
+    conteudoHtml += `<div class="bolha-hora">${formatarHora(m.timestamp)}</div>`;
+
+    bolha.innerHTML = conteudoHtml;
+    container.appendChild(bolha);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function escaparHtml(texto) {
+  const div = document.createElement('div');
+  div.textContent = texto;
+  return div.innerHTML;
+}
+
+// ---- Tempo real via SSE ----
+function conectarEventos() {
+  const es = new EventSource('/api/eventos');
+  es.onmessage = (ev) => {
+    const evento = JSON.parse(ev.data);
+
+    if (evento.tipo === 'status') {
+      carregarStatus();
+      if (evento.status === 'conectado') carregarConversas();
+    }
+    if (evento.tipo === 'qr') {
+      carregarStatus();
+    }
+    if (evento.tipo === 'mensagem_nova') {
+      carregarConversas();
+      if (conversaAtiva === evento.conversaJid) abrirConversa(conversaAtiva, document.getElementById('chat-topo-nome').textContent);
+    }
+    if (evento.tipo === 'mensagem_apagada') {
+      if (conversaAtiva === evento.conversaJid) abrirConversa(conversaAtiva, document.getElementById('chat-topo-nome').textContent);
+    }
+    if (evento.tipo === 'presenca') {
+      presencas[evento.jid] = evento.status;
+      carregarConversas();
+      if (conversaAtiva === evento.jid) {
+        const statusEl = document.getElementById('chat-topo-status');
+        if (evento.status === 'online') {
+          statusEl.textContent = 'online agora';
+          statusEl.classList.add('online');
+        } else {
+          statusEl.textContent = evento.status;
+          statusEl.classList.remove('online');
+        }
+      }
+    }
+  };
+  es.onerror = () => {
+    setTimeout(conectarEventos, 3000);
+  };
+}
+
+function voltarParaLista() {
+  document.getElementById('sidebar').classList.remove('escondida');
+  document.getElementById('chat-area').classList.add('escondida');
+}
+
+async function enviarMensagem() {
+  const campo = document.getElementById('campo-mensagem');
+  const texto = campo.value.trim();
+  if (!texto || !conversaAtiva) return;
+
+  const btn = document.getElementById('btn-enviar');
+  btn.disabled = true;
+  campo.value = '';
+  campo.style.height = 'auto';
+
+  try {
+    const res = await fetch(`/api/conversas/${encodeURIComponent(conversaAtiva)}/mensagens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto }),
+    });
+    if (!res.ok) {
+      const erro = await res.json();
+      alert('Erro ao enviar: ' + (erro.erro || 'desconhecido'));
+      campo.value = texto; // devolve o texto pro usuário não perder
+    }
+  } catch (err) {
+    alert('Erro de conexão ao enviar mensagem');
+    campo.value = texto;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Enter envia, Shift+Enter quebra linha
+document.getElementById('campo-mensagem').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    enviarMensagem();
+  }
+});
+
+// Auto-altura do campo de texto
+document.getElementById('campo-mensagem').addEventListener('input', function () {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+});
+
+// ============================================================
+// Anexo de arquivo (foto, vídeo, documento)
+// ============================================================
+let arquivoSelecionado = null;
+
+function selecionarArquivo(ev) {
+  const arquivo = ev.target.files[0];
+  if (!arquivo) return;
+  arquivoSelecionado = arquivo;
+
+  const preview = document.getElementById('preview-anexo');
+  const conteudo = document.getElementById('preview-anexo-conteudo');
+  const nomeEl = document.getElementById('preview-anexo-nome');
+
+  conteudo.innerHTML = '';
+  if (arquivo.type.startsWith('image/')) {
+    const url = URL.createObjectURL(arquivo);
+    conteudo.innerHTML = `<img src="${url}" />`;
+  } else if (arquivo.type.startsWith('video/')) {
+    const url = URL.createObjectURL(arquivo);
+    conteudo.innerHTML = `<video src="${url}"></video>`;
+  } else {
+    conteudo.innerHTML = '📎';
+  }
+  nomeEl.textContent = arquivo.name;
+  preview.style.display = 'flex';
+}
+
+function cancelarAnexo() {
+  arquivoSelecionado = null;
+  document.getElementById('input-arquivo').value = '';
+  document.getElementById('preview-anexo').style.display = 'none';
+}
+
+async function enviarAnexo() {
+  if (!arquivoSelecionado || !conversaAtiva) return;
+
+  const legenda = document.getElementById('campo-mensagem').value.trim();
+  const formData = new FormData();
+  formData.append('arquivo', arquivoSelecionado);
+  if (legenda) formData.append('legenda', legenda);
+
+  const btn = document.getElementById('btn-enviar');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/conversas/${encodeURIComponent(conversaAtiva)}/midia`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const erro = await res.json();
+      alert('Erro ao enviar arquivo: ' + (erro.erro || 'desconhecido'));
+    } else {
+      cancelarAnexo();
+      document.getElementById('campo-mensagem').value = '';
+    }
+  } catch (err) {
+    alert('Erro de conexão ao enviar arquivo');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ============================================================
+// Gravação de áudio
+// ============================================================
+let gravador = null;
+let pedacosAudio = [];
+let gravando = false;
+
+async function alternarGravacaoAudio() {
+  if (gravando) {
+    pararGravacao();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    gravador = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    pedacosAudio = [];
+
+    gravador.ondataavailable = (ev) => pedacosAudio.push(ev.data);
+    gravador.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(pedacosAudio, { type: 'audio/webm' });
+      await enviarAudioGravado(blob);
+    };
+
+    gravador.start();
+    gravando = true;
+    document.getElementById('btn-enviar').classList.add('gravando');
+    document.getElementById('btn-enviar').textContent = '⏹';
+  } catch (err) {
+    alert('Não consegui acessar o microfone: ' + err.message);
+  }
+}
+
+function pararGravacao() {
+  if (gravador && gravando) {
+    gravador.stop();
+    gravando = false;
+    document.getElementById('btn-enviar').classList.remove('gravando');
+    document.getElementById('btn-enviar').textContent = '➤';
+  }
+}
+
+async function enviarAudioGravado(blob) {
+  if (!conversaAtiva) return;
+  const formData = new FormData();
+  formData.append('arquivo', blob, 'audio.webm');
+  formData.append('tipo', 'audio');
+
+  try {
+    const res = await fetch(`/api/conversas/${encodeURIComponent(conversaAtiva)}/midia`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const erro = await res.json();
+      alert('Erro ao enviar áudio: ' + (erro.erro || 'desconhecido'));
+    }
+  } catch (err) {
+    alert('Erro de conexão ao enviar áudio');
+  }
+}
+
+// Botão de enviar decide a ação: anexo > áudio > texto
+function acaoBotaoEnviar() {
+  if (arquivoSelecionado) {
+    enviarAnexo();
+  } else {
+    const temTexto = document.getElementById('campo-mensagem').value.trim().length > 0;
+    if (temTexto) {
+      enviarMensagem();
+    } else {
+      alternarGravacaoAudio();
+    }
+  }
+}
+
+// ============================================================
+// Emoji
+// ============================================================
+const LISTA_EMOJIS = ['😀','😁','😂','🤣','😊','😍','😘','😎','🤔','😅','😭','😢','😡','🥳','👍','👎','🙏','👏','💪','🔥','❤️','💔','✅','❌','🎉','😴','🤝','👌','🙌','😏','😉','😜','🤗','😬','🥰','😇','🤯','😱','🤤','🙄'];
+
+function montarPainelEmoji() {
+  const painel = document.getElementById('painel-emoji');
+  painel.innerHTML = LISTA_EMOJIS.map(
+    (e) => `<div class="emoji-item" onclick="inserirEmoji('${e}')">${e}</div>`
+  ).join('');
+}
+
+function alternarPainelEmoji() {
+  const painel = document.getElementById('painel-emoji');
+  const aberto = painel.classList.toggle('aberto');
+  if (aberto && !painel.innerHTML) montarPainelEmoji();
+}
+
+function inserirEmoji(emoji) {
+  const campo = document.getElementById('campo-mensagem');
+  campo.value += emoji;
+  campo.focus();
+}
+
+carregarStatus();
+carregarConversas();
+conectarEventos();
+setInterval(carregarStatus, 4000);
+</script>
+</body>
+</html>
