@@ -20,6 +20,27 @@ if (!fs.existsSync(UPLOAD_TEMP_DIR)) fs.mkdirSync(UPLOAD_TEMP_DIR, { recursive: 
 const upload = multer({ dest: UPLOAD_TEMP_DIR, limits: { fileSize: 64 * 1024 * 1024 } }); // até 64MB
 
 app.use(express.json());
+
+// ---- Segurança do servidor local ----
+// Só a página do próprio app (e a do Radinho, que embute o Chat Slim) pode ler/usar a API.
+// Todo comando que muda algo (enviar mensagem, mídia, pareamento) exige o cabeçalho
+// X-ChatSlim: isso obriga o navegador a pedir permissão antes, e sites de fora não ganham.
+const ORIGENS_PERMITIDAS = new Set(['https://appassets.androidplatform.net']);
+app.use((req, res, next) => {
+  const origem = req.headers.origin;
+  if (origem && ORIGENS_PERMITIDAS.has(origem)) {
+    res.setHeader('Access-Control-Allow-Origin', origem);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-ChatSlim');
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(origem && ORIGENS_PERMITIDAS.has(origem) ? 204 : 403);
+  if (req.method === 'POST' && req.headers['x-chatslim'] !== '1') {
+    return res.status(403).json({ erro: 'Pedido recusado' });
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/midia', express.static(db.MIDIA_DIR));
 
@@ -97,6 +118,19 @@ app.post('/api/conversas/:jid/midia', upload.single('arquivo'), async (req, res)
       fs.unlink(arquivoTemp, () => {});
     }
   }
+});
+
+// Marcar conversa como lida
+app.post('/api/conversas/:jid/lidas', (req, res) => {
+  db.marcarLidas(decodeURIComponent(req.params.jid));
+  res.json({ ok: true });
+});
+
+// Presença de um contato (online/offline/digitando)
+app.get('/api/presenca/:jid', (req, res) => {
+  const jid = decodeURIComponent(req.params.jid);
+  motor.assinarPresenca(jid);
+  res.json(db.obterPresenca(jid) || {});
 });
 
 // Conectar pelo número de telefone (código de pareamento)

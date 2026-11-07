@@ -1,7 +1,11 @@
 name: Teste Radinho master no emulador
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      script:
+        description: Script de teste
+        default: teste-radinho.sh
 
 permissions:
   contents: write
@@ -34,7 +38,7 @@ jobs:
           target: google_apis
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: bash scripts/teste-radinho.sh
+          script: bash scripts/${{ github.event.inputs.script || 'teste-radinho.sh' }}
 
       - name: Publicar resultado (branch teste-resultado)
         if: always()

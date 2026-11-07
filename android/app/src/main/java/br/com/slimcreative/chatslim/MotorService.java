@@ -8,6 +8,7 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Binder;
 import android.os.IBinder;
 
 /**
@@ -25,6 +26,9 @@ public class MotorService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Embutido no Radinho: sem notificação própria. O motor fica ligado ao
+        // serviço do rádio (Integracao.ligarMotor), que já mantém o app vivo.
+        if (Config.embutido(this)) return START_STICKY;
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel canal = new NotificationChannel(CANAL, "Conexão do WhatsApp (Chat Slim)", NotificationManager.IMPORTANCE_MIN);
             getSystemService(NotificationManager.class).createNotificationChannel(canal);
@@ -52,6 +56,6 @@ public class MotorService extends Service {
 
     @Override
     public IBinder onBind(Intent intent) {
-        return null;
+        return new Binder();
     }
 }

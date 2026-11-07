@@ -100,9 +100,6 @@ def main():
     # 5) Manifest
     mpath = os.path.join(rad, 'AndroidManifest.xml')
     m = open(mpath, encoding='utf-8').read()
-    perm = '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>'
-    if perm not in m:
-        m = m.replace('<application ', perm + '\n    <application ', 1)
     m = re.sub(r'<application ', '<application android:extractNativeLibs="true" '
                'android:networkSecurityConfig="@xml/chatslim_rede" ', m, count=1)
     componentes = f'''
@@ -110,10 +107,13 @@ def main():
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize" android:theme="@android:style/Theme.Material.NoActionBar"/>
         <service android:name="br.com.slimcreative.chatslim.MotorService" android:exported="false"
-            android:process=":motor" android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Mantém a conexão de mensagens do app ativa em segundo plano"/>
-        </service>
+            android:process=":motor"/>
+        <receiver android:name="br.com.slimcreative.chatslim.BootMotor" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
         <meta-data android:name="chatslim.porta" android:value="{PORTA_EMBUTIDO}"/>
         <meta-data android:name="chatslim.embutido" android:value="true"/>
     </application>'''

@@ -13,6 +13,7 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   downloadMediaMessage,
+  normalizeMessageContent,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
@@ -59,20 +60,106 @@ function detectarTipo(mensagem) {
   return 'outro';
 }
 
-async function salvarMidiaSeHouver(m, tipo) {
-  if (!['imagem', 'video', 'audio', 'sticker', 'documento'].includes(tipo)) return { path: null, mimetype: null };
+const CHAVE_DO_TIPO = {
+  imagem: 'imageMessage',
+  video: 'videoMessage',
+  audio: 'audioMessage',
+  sticker: 'stickerMessage',
+  documento: 'documentMessage',
+};
+
+async function salvarMidiaSeHouver(m, conteudo, tipo) {
+  if (!CHAVE_DO_TIPO[tipo]) return { path: null, mimetype: null };
   try {
     const buffer = await downloadMediaMessage(m, 'buffer', {});
-    const conteudo = m.message[Object.keys(m.message).find((k) => k.toLowerCase().includes(tipo === 'imagem' ? 'image' : tipo))];
-    const mimetype = conteudo?.mimetype || 'application/octet-stream';
+    const info = conteudo[CHAVE_DO_TIPO[tipo]] || {};
+    const mimetype = info.mimetype || 'application/octet-stream';
     const ext = mimetype.split('/')[1]?.split(';')[0] || 'bin';
     const nomeArquivo = `${crypto.randomUUID()}.${ext}`;
-    const caminhoCompleto = path.join(db.MIDIA_DIR, nomeArquivo);
-    fs.writeFileSync(caminhoCompleto, buffer);
+    fs.writeFileSync(path.join(db.MIDIA_DIR, nomeArquivo), buffer);
     return { path: nomeArquivo, mimetype };
   } catch (err) {
     console.error('Erro ao baixar mídia:', err.message);
     return { path: null, mimetype: null };
+  }
+}
+
+function ignorarConversa(jid) {
+  return !jid || jid === 'status@broadcast' || jid.endsWith('@broadcast') || jid.endsWith('@newsletter');
+}
+
+// nome dos grupos (busca uma vez por grupo)
+const gruposConsultados = new Set();
+async function garantirNomeDoGrupo(jid) {
+  if (!jid.endsWith('@g.us') || gruposConsultados.has(jid) || !socketAtual) return;
+  gruposConsultados.add(jid);
+  try {
+    const meta = await socketAtual.groupMetadata(jid);
+    if (meta && meta.subject) {
+      db.definirNomeContato(jid, meta.subject);
+      emitir({ tipo: 'conversas' });
+    }
+  } catch (_) {}
+}
+
+/**
+ * Guarda uma mensagem do WhatsApp.
+ *   tempoReal = true  → chegou agora (baixa a mídia, conta como não lida, avisa a tela)
+ *   tempoReal = false → veio do histórico ao conectar (só registra, sem baixar mídia)
+ */
+async function processarMensagem(m, tempoReal) {
+  if (!m || !m.message || !m.key) return;
+  const conversaJid = m.key.remoteJid;
+  if (ignorarConversa(conversaJid)) return;
+
+  const conteudo = normalizeMessageContent(m.message) || m.message;
+  if (conteudo.protocolMessage || conteudo.reactionMessage || conteudo.pollUpdateMessage) return;
+  const tipo = detectarTipo(conteudo);
+  if (tipo === 'outro') return;
+
+  const ehGrupo = conversaJid.endsWith('@g.us');
+  const deMim = Boolean(m.key.fromMe);
+  const remetenteJid = ehGrupo ? m.key.participant : conversaJid;
+  const texto = extrairTexto(conteudo);
+  const timestamp = (Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
+
+  const { path: midiaPath, mimetype } = tempoReal
+    ? await salvarMidiaSeHouver(m, conteudo, tipo)
+    : { path: null, mimetype: (conteudo[CHAVE_DO_TIPO[tipo]] || {}).mimetype || null };
+
+  db.upsertConversa({
+    jid: conversaJid,
+    // pushName é o nome de quem MANDOU: só serve pra nomear a conversa se não fui eu
+    nome: !ehGrupo && !deMim ? m.pushName : null,
+    ehGrupo,
+    naoLida: tempoReal && !deMim,
+  });
+
+  db.salvarMensagem({
+    id: m.key.id,
+    conversaJid,
+    remetenteJid,
+    remetenteNome: deMim ? null : m.pushName || null,
+    deMim: deMim ? 1 : 0,
+    tipo,
+    texto,
+    midiaPath,
+    midiaMimetype: mimetype,
+    timestamp,
+  });
+
+  db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp);
+  if (ehGrupo) garantirNomeDoGrupo(conversaJid);
+
+  if (tempoReal) {
+    emitir({
+      tipo: 'mensagem_nova',
+      conversaJid,
+      remetenteNome: deMim ? null : m.pushName,
+      deMim,
+      texto,
+      tipoMsg: tipo,
+    });
   }
 }
 
@@ -116,52 +203,56 @@ async function iniciar() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ---- Mensagens novas ----
+  // ---- Mensagens novas (e as que chegaram enquanto estava desligado) ----
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-
     for (const m of messages) {
-      if (!m.message) continue;
-
-      const ehGrupo = m.key.remoteJid?.endsWith('@g.us');
-      const deMim = Boolean(m.key.fromMe);
-      const conversaJid = m.key.remoteJid;
-      const remetenteJid = ehGrupo ? m.key.participant : m.key.remoteJid;
-      const tipo = detectarTipo(m.message);
-      const texto = extrairTexto(m.message);
-      const timestamp = (Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
-
-      const { path: midiaPath, mimetype } = await salvarMidiaSeHouver(m, tipo);
-
-      db.upsertConversa({
-        jid: conversaJid,
-        nome: ehGrupo ? null : m.pushName,
-        ehGrupo,
-      });
-
-      db.salvarMensagem({
-        id: m.key.id,
-        conversaJid,
-        remetenteJid,
-        remetenteNome: m.pushName || null,
-        deMim: deMim ? 1 : 0,
-        tipo,
-        texto,
-        midiaPath,
-        midiaMimetype: mimetype,
-        timestamp,
-      });
-
-      db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp);
-
-      emitir({
-        tipo: 'mensagem_nova',
-        conversaJid,
-        remetenteNome: m.pushName,
-        texto,
-        tipoMsg: tipo,
-      });
+      try {
+        await processarMensagem(m, type === 'notify');
+      } catch (err) {
+        console.error('Erro ao processar mensagem:', err.message);
+      }
     }
+    if (type !== 'notify') emitir({ tipo: 'conversas' });
+  });
+
+  // ---- Histórico que o WhatsApp manda ao conectar (conversas, contatos, mensagens recentes) ----
+  sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
+    try {
+      for (const c of contacts || []) {
+        const nome = c.name || c.notify || c.verifiedName;
+        if (c.id && nome) db.definirNomeContato(c.id, nome);
+      }
+      for (const ch of chats || []) {
+        if (ignorarConversa(ch.id)) continue;
+        db.upsertConversa({ jid: ch.id, nome: null, ehGrupo: ch.id.endsWith('@g.us') });
+        if (ch.name) db.definirNomeContato(ch.id, ch.name);
+        const ts = Number(ch.conversationTimestamp || 0) * 1000;
+        if (ts) db.atualizarUltimaMensagem(ch.id, null, ts);
+      }
+      for (const m of messages || []) await processarMensagem(m, false);
+      emitir({ tipo: 'conversas' });
+    } catch (err) {
+      console.error('Erro no histórico:', err.message);
+    }
+  });
+
+  // ---- Nomes dos contatos (agenda do celular / nome do perfil) ----
+  const salvarContatos = (lista) => {
+    let mudou = false;
+    for (const c of lista || []) {
+      const nome = c.name || c.notify || c.verifiedName;
+      if (c.id && nome) {
+        db.definirNomeContato(c.id, nome);
+        mudou = true;
+      }
+    }
+    if (mudou) emitir({ tipo: 'conversas' });
+  };
+  sock.ev.on('contacts.upsert', salvarContatos);
+  sock.ev.on('contacts.update', salvarContatos);
+  sock.ev.on('groups.update', (lista) => {
+    for (const g of lista || []) if (g.id && g.subject) db.definirNomeContato(g.id, g.subject);
+    emitir({ tipo: 'conversas' });
   });
 
   // ---- Exclusão de mensagens (protocol messages) ----
@@ -258,6 +349,14 @@ async function pedirCodigoPareamento(numero) {
   return limpo.length === 8 ? `${limpo.slice(0, 4)}-${limpo.slice(4)}` : limpo;
 }
 
+// Pede ao WhatsApp pra avisar quando esse contato ficar online/digitando
+async function assinarPresenca(jid) {
+  if (!socketAtual || statusConexao !== 'conectado') return;
+  try {
+    await socketAtual.presenceSubscribe(jid);
+  } catch (_) {}
+}
+
 async function enviarMensagem(jid, texto) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
@@ -294,6 +393,8 @@ module.exports = {
   enviarMensagem,
   enviarMidia,
   pedirCodigoPareamento,
+  assinarPresenca,
+  _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
   getQR: () => ultimoQR,
 };

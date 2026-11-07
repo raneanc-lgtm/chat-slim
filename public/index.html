@@ -315,7 +315,7 @@ async function gerarCodigoPareamento() {
   botao.disabled = true; botao.textContent = 'Gerando...';
   saida.innerHTML = '';
   try {
-    const r = await fetch('/api/pareamento', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numero }) });
+    const r = await fetch('/api/pareamento', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-ChatSlim': '1' }, body: JSON.stringify({ numero }) });
     const d = await r.json();
     if (!r.ok) throw new Error(d.erro || 'Falhou');
     saida.innerHTML = `
@@ -356,14 +356,14 @@ async function carregarConversas() {
   for (const c of conversas) {
     const div = document.createElement('div');
     div.className = 'conversa-item' + (conversaAtiva === c.jid ? ' ativa' : '');
-    div.onclick = () => abrirConversa(c.jid, c.nome || c.jid);
+    div.onclick = () => abrirConversa(c.jid, c.nome_exibicao || c.nome || c.jid);
 
     const online = presencas[c.jid] === 'online';
 
     div.innerHTML = `
-      <div class="avatar">${iniciais(c.nome || c.jid)}<span class="bolinha-online ${online ? 'ativa' : ''}"></span></div>
+      <div class="avatar">${iniciais(c.nome_exibicao || c.nome || c.jid)}<span class="bolinha-online ${online ? 'ativa' : ''}"></span></div>
       <div class="conversa-info">
-        <div class="conversa-nome">${c.nome || c.jid.split('@')[0]}</div>
+        <div class="conversa-nome">${c.nome_exibicao || c.nome || c.jid.split("@")[0]}</div>
         <div class="conversa-preview">${c.ultima_mensagem_texto || ''}</div>
       </div>
     `;
@@ -495,7 +495,7 @@ async function enviarMensagem() {
   try {
     const res = await fetch(`/api/conversas/${encodeURIComponent(conversaAtiva)}/mensagens`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-ChatSlim': '1' },
       body: JSON.stringify({ texto }),
     });
     if (!res.ok) {
@@ -573,6 +573,7 @@ async function enviarAnexo() {
   try {
     const res = await fetch(`/api/conversas/${encodeURIComponent(conversaAtiva)}/midia`, {
       method: 'POST',
+      headers: { 'X-ChatSlim': '1' },
       body: formData,
     });
     if (!res.ok) {
@@ -642,6 +643,7 @@ async function enviarAudioGravado(blob) {
   try {
     const res = await fetch(`/api/conversas/${encodeURIComponent(conversaAtiva)}/midia`, {
       method: 'POST',
+      headers: { 'X-ChatSlim': '1' },
       body: formData,
     });
     if (!res.ok) {

@@ -50,6 +50,8 @@ async function empacotar() {
     ...comum,
     entryPoints: [path.join(raiz, 'server.js')],
     outfile: path.join(saida, 'app.js'),
+    minify: true, // arquivo menor = o Node lê mais rápido ao abrir o app
+    keepNames: true,
     external: ['sharp'], // binário nativo de PC, não roda no Android (Baileys trata a ausência)
     plugins: [semUnicodeProps],
   });

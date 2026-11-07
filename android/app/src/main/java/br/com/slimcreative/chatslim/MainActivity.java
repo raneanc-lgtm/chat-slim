@@ -136,6 +136,10 @@ public class MainActivity extends Activity {
     }
 
     private void iniciarMotor() {
+        if (Config.embutido(this)) {
+            Integracao.ligarMotor(this);
+            return;
+        }
         Intent i = new Intent(this, MotorService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
