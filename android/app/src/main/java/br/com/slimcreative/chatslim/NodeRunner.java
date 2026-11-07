@@ -21,11 +21,6 @@ public final class NodeRunner {
     private static final String PASTA_MOTOR = "nodejs-project";
     private static boolean iniciado = false;
 
-    static {
-        System.loadLibrary("node");
-        System.loadLibrary("chatslim-node");
-    }
-
     private static native int startNode(String[] args);
 
     private NodeRunner() {}
@@ -37,6 +32,9 @@ public final class NodeRunner {
         final Context app = ctx.getApplicationContext();
         Thread t = new Thread(null, () -> {
             try {
+                System.loadLibrary("node");
+                System.loadLibrary("chatslim-node");
+
                 File destino = new File(app.getFilesDir(), PASTA_MOTOR);
                 prepararMotor(app, destino);
 
@@ -49,8 +47,11 @@ public final class NodeRunner {
                 String principal = new File(destino, "main.js").getAbsolutePath();
                 int codigo = startNode(new String[]{"node", principal});
                 Log.e(TAG, "Node encerrou com código " + codigo);
+                ChatSlimApp.registrar(app, "crash-motor.txt", "O motor Node parou",
+                        new RuntimeException("node::Start retornou " + codigo));
             } catch (Throwable e) {
                 Log.e(TAG, "Falha ao iniciar o motor", e);
+                ChatSlimApp.registrar(app, "crash-motor.txt", "Falha ao iniciar o motor", e);
             }
         }, "node-motor", 16L * 1024 * 1024);
         t.start();

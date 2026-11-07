@@ -19,7 +19,10 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.io.File;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
+import java.nio.charset.StandardCharsets;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,6 +47,19 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            criarTela();
+        } catch (Throwable e) {
+            ChatSlimApp.registrar(this, "crash-ui.txt", "Erro ao abrir a tela", e);
+            android.widget.TextView tv = new android.widget.TextView(this);
+            tv.setTextIsSelectable(true);
+            tv.setPadding(30, 60, 30, 30);
+            tv.setText("Chat Slim — erro ao abrir:\n\n" + android.util.Log.getStackTraceString(e));
+            setContentView(new android.widget.ScrollView(this) {{ addView(tv); }});
+        }
+    }
+
+    private void criarTela() {
         Window w = getWindow();
         w.setStatusBarColor(Color.parseColor("#0e1621"));
         w.setNavigationBarColor(Color.parseColor("#0e1621"));
@@ -56,6 +72,64 @@ public class MainActivity extends Activity {
         pedirPermissoesIniciais();
         iniciarMotor();
 
+        if (new File(getFilesDir(), "crash-ui.txt").exists() || new File(getFilesDir(), "crash-motor.txt").exists()) {
+            // da última vez deu erro: mostra o que aconteceu antes de seguir
+            mostrarDiagnostico("O app fechou com erro da última vez", true);
+        } else {
+            web.loadDataWithBaseURL(null, TELA_CARREGANDO, "text/html", "utf-8", null);
+            aguardarServidorEAbrir();
+        }
+    }
+
+    // ---------- Diagnóstico (mostra o erro na tela pra tirar print) ----------
+    private static String lerFinal(File f, int maxBytes) {
+        if (!f.exists()) return "";
+        try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
+            long ini = Math.max(0, raf.length() - maxBytes);
+            byte[] b = new byte[(int) (raf.length() - ini)];
+            raf.seek(ini);
+            raf.readFully(b);
+            return new String(b, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "(não consegui ler " + f.getName() + ": " + e + ")";
+        }
+    }
+
+    private static String esc(String t) {
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private void mostrarDiagnostico(String titulo, boolean comBotaoContinuar) {
+        File d = getFilesDir();
+        String crashUi = lerFinal(new File(d, "crash-ui.txt"), 6000);
+        String crashMotor = lerFinal(new File(d, "crash-motor.txt"), 6000);
+        String log = lerFinal(new File(d, "motor.log"), 5000);
+        StringBuilder h = new StringBuilder();
+        h.append("<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>")
+         .append("<body style='margin:0;padding:14px;background:#0e1621;color:#e6e6e6;font-family:sans-serif'>")
+         .append("<h3 style='margin:0 0 6px'>").append(esc(titulo)).append("</h3>")
+         .append("<div style='opacity:.7;font-size:13px;margin-bottom:10px'>Tire print desta tela e mande pro suporte.</div>");
+        if (comBotaoContinuar) {
+            h.append("<a href='https://chatslim.continuar/' style='display:inline-block;background:#6c5ce7;color:#fff;")
+             .append("padding:10px 16px;border-radius:8px;text-decoration:none;margin-bottom:12px'>Continuar</a>");
+        }
+        secao(h, "Erro do app", crashUi);
+        secao(h, "Erro do motor", crashMotor);
+        secao(h, "Log do motor (final)", log.isEmpty() ? "(vazio — o motor não chegou a escrever nada)" : log);
+        h.append("</body></html>");
+        web.loadDataWithBaseURL(null, h.toString(), "text/html", "utf-8", null);
+    }
+
+    private static void secao(StringBuilder h, String nome, String conteudo) {
+        if (conteudo == null || conteudo.isEmpty()) return;
+        h.append("<div style='font-weight:bold;margin-top:10px'>").append(nome).append("</div>")
+         .append("<pre style='white-space:pre-wrap;word-break:break-all;font-size:11px;background:#17212b;")
+         .append("padding:8px;border-radius:6px'>").append(esc(conteudo)).append("</pre>");
+    }
+
+    private void continuarDepoisDoDiagnostico() {
+        new File(getFilesDir(), "crash-ui.txt").delete();
+        new File(getFilesDir(), "crash-motor.txt").delete();
         web.loadDataWithBaseURL(null, TELA_CARREGANDO, "text/html", "utf-8", null);
         aguardarServidorEAbrir();
     }
@@ -79,6 +153,10 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 Uri u = req.getUrl();
                 if ("127.0.0.1".equals(u.getHost())) return false;
+                if ("chatslim.continuar".equals(u.getHost())) {
+                    continuarDepoisDoDiagnostico();
+                    return true;
+                }
                 // links externos abrem no navegador
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, u));
@@ -140,16 +218,22 @@ public class MainActivity extends Activity {
 
     private void aguardarServidorEAbrir() {
         new Thread(() -> {
-            long limite = System.currentTimeMillis() + 90_000;
-            while (System.currentTimeMillis() < limite) {
+            long inicio = System.currentTimeMillis();
+            boolean diagnosticoMostrado = false;
+            while (System.currentTimeMillis() - inicio < 180_000) {
                 if (servidorRespondendo()) {
                     ui.post(() -> web.loadUrl(ENDERECO));
                     return;
                 }
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                long passou = System.currentTimeMillis() - inicio;
+                boolean motorCaiu = new File(getFilesDir(), "crash-motor.txt").exists();
+                if (!diagnosticoMostrado && (motorCaiu || passou > 25_000)) {
+                    diagnosticoMostrado = true;
+                    final String titulo = motorCaiu ? "O motor parou com erro" : "O motor está demorando pra responder";
+                    ui.post(() -> mostrarDiagnostico(titulo, false));
+                }
+                try { Thread.sleep(700); } catch (InterruptedException ignored) {}
             }
-            ui.post(() -> web.evaluateJavascript(
-                    "document.getElementById('m').innerText='O motor não respondeu. Feche e abra o app de novo.'", null));
         }).start();
     }
 

@@ -11,12 +11,14 @@ android {
         applicationId 'br.com.slimcreative.chatslim'
         minSdk 24
         targetSdk 34
-        versionCode 2
-        versionName '1.1'
+        versionCode 3
+        versionName '1.2'
 
         ndk {
-            // só as arquiteturas que o Node embarcado (nodejs-mobile) oferece
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
+            // só as arquiteturas que o Node embarcado (nodejs-mobile) oferece;
+            // x86_64 entra só no build de teste no emulador (-PincluirX86)
+            abiFilters.addAll(['arm64-v8a', 'armeabi-v7a'])
+            if (project.hasProperty('incluirX86')) abiFilters.add('x86_64')
         }
         externalNativeBuild {
             cmake {
