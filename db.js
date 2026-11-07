@@ -29,7 +29,17 @@ if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 const adapter = new FileSync(path.join(DATA_DIR, 'chatslim.json'));
 const db = low(adapter);
 
-db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [] }).write();
+db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [] }).write();
+
+// Limpeza de dados antigos: versões anteriores guardavam status e canais como se fossem conversa
+(function limparLixo() {
+  const lixo = (jid) => !jid || jid.endsWith('@broadcast') || jid.endsWith('@newsletter');
+  const ruins = db.get('conversas').filter((c) => lixo(c.jid)).map('jid').value();
+  if (ruins.length) {
+    db.get('conversas').remove((c) => lixo(c.jid)).write();
+    db.get('mensagens').remove((m) => lixo(m.conversa_jid)).write();
+  }
+})();
 
 // ---- Conversas ----
 function upsertConversa({ jid, nome, ehGrupo, naoLida }) {
@@ -66,23 +76,127 @@ function marcarLidas(jid) {
   db.get('conversas').find({ jid }).assign({ nao_lidas: 0 }).write();
 }
 
-// nome salvo na agenda / nome do grupo
-function definirNomeContato(jid, nome) {
+// Nomes: "agenda" (o que VOCÊ salvou) > "grupo" (nome do grupo) > "perfil" (o que a pessoa pôs)
+function definirNomeContato(jid, nome, fonte = 'perfil') {
+  if (!jid || !nome) return;
+  const campo = fonte === 'agenda' ? 'nome_agenda' : fonte === 'grupo' ? 'nome_grupo' : 'nome_perfil';
   const existente = db.get('contatos').find({ jid }).value();
   if (existente) {
-    if (existente.nome !== nome) db.get('contatos').find({ jid }).assign({ nome }).write();
+    if (existente[campo] !== nome) db.get('contatos').find({ jid }).assign({ [campo]: nome }).write();
   } else {
-    db.get('contatos').push({ jid, nome }).write();
+    db.get('contatos').push({ jid, [campo]: nome }).write();
   }
 }
 
-function nomeExibicao(c) {
-  const contato = db.get('contatos').find({ jid: c.jid }).value();
-  if (contato && contato.nome) return contato.nome;
-  if (c.nome) return c.nome;
-  const id = String(c.jid || '').split('@')[0];
+function nomeDoContato(jid) {
+  const c = db.get('contatos').find({ jid }).value();
+  if (c) {
+    // "nome" = formato antigo (versão anterior), tratado como perfil
+    const n = c.nome_agenda || c.nome_grupo || c.nome_perfil || c.nome;
+    if (n) return n;
+  }
+  // nome guardado no código interno (@lid) dessa mesma pessoa
+  for (const x of db.get('lids').filter({ pn: jid }).value()) {
+    const l = db.get('contatos').find({ jid: x.lid }).value();
+    if (l) {
+      const n = l.nome_agenda || l.nome_grupo || l.nome_perfil || l.nome;
+      if (n) return n;
+    }
+  }
+  return null;
+}
+
+function formatarNumero(jid) {
+  const id = String(jid || '').split('@')[0];
   if (/^55\d{10,11}$/.test(id)) return `+55 ${id.slice(2, 4)} ${id.slice(4, -4)}-${id.slice(-4)}`;
   return /^\d+$/.test(id) ? '+' + id : id;
+}
+
+function nomeExibicao(c) {
+  return nomeDoContato(c.jid) || c.nome || formatarNumero(c.jid);
+}
+
+// conversas onde o nome ficou com o SEU nome (bug de versão anterior)
+function limparNomeIgual(meuNome) {
+  db.get('conversas').filter((c) => !c.eh_grupo && c.nome === meuNome).value()
+    .forEach((c) => db.get('conversas').find({ jid: c.jid }).assign({ nome: null }).write());
+}
+
+// ---- Código interno (@lid) x número: junta tudo no número ----
+function listarLids() {
+  return db.get('lids').value();
+}
+
+function unificarLid(lid, pn) {
+  if (!db.get('lids').find({ lid }).value()) db.get('lids').push({ lid, pn }).write();
+  // mensagens
+  db.get('mensagens').filter({ conversa_jid: lid }).value()
+    .forEach((m) => db.get('mensagens').find({ id: m.id }).assign({ conversa_jid: pn }).write());
+  db.get('mensagens').filter({ remetente_jid: lid }).value()
+    .forEach((m) => db.get('mensagens').find({ id: m.id }).assign({ remetente_jid: pn }).write());
+  // conversa
+  const cl = db.get('conversas').find({ jid: lid }).value();
+  if (cl) {
+    const cp = db.get('conversas').find({ jid: pn }).value();
+    if (cp) {
+      const novaMaisRecente = (cl.ultima_mensagem_ts || 0) > (cp.ultima_mensagem_ts || 0);
+      db.get('conversas').find({ jid: pn }).assign({
+        nome: cp.nome || cl.nome,
+        nao_lidas: (cp.nao_lidas || 0) + (cl.nao_lidas || 0),
+        ultima_mensagem_ts: Math.max(cl.ultima_mensagem_ts || 0, cp.ultima_mensagem_ts || 0),
+        ultima_mensagem_texto: novaMaisRecente ? cl.ultima_mensagem_texto : cp.ultima_mensagem_texto,
+      }).write();
+      db.get('conversas').remove({ jid: lid }).write();
+    } else {
+      db.get('conversas').find({ jid: lid }).assign({ jid: pn }).write();
+    }
+  }
+  // status
+  db.get('status').filter({ autor_jid: lid }).value()
+    .forEach((x) => db.get('status').find({ id: x.id }).assign({ autor_jid: pn }).write());
+}
+
+// ---- Apagar conversa ----
+function ultimaMensagem(jid) {
+  return db.get('mensagens').filter({ conversa_jid: jid }).orderBy(['timestamp'], ['desc']).head().value();
+}
+
+function apagarArquivoMidia(nome) {
+  if (!nome) return;
+  try { fs.unlinkSync(path.join(MIDIA_DIR, path.basename(nome))); } catch (_) {}
+}
+
+function apagarConversa(jid) {
+  db.get('mensagens').filter({ conversa_jid: jid }).value().forEach((m) => apagarArquivoMidia(m.midia_path));
+  db.get('mensagens').remove({ conversa_jid: jid }).write();
+  db.get('conversas').remove({ jid }).write();
+}
+
+// ---- Status (24h) ----
+function salvarStatus(st) {
+  if (db.get('status').find({ id: st.id }).value()) return;
+  db.get('status').push(st).write();
+}
+
+function listarStatus() {
+  const limite = Date.now() - 24 * 60 * 60 * 1000;
+  const velhos = db.get('status').filter((x) => x.timestamp < limite).value();
+  if (velhos.length) {
+    velhos.forEach((x) => apagarArquivoMidia(x.midia_path));
+    db.get('status').remove((x) => x.timestamp < limite).write();
+  }
+  const porAutor = {};
+  for (const x of db.get('status').orderBy(['timestamp'], ['asc']).value()) {
+    (porAutor[x.autor_jid] = porAutor[x.autor_jid] || []).push(x);
+  }
+  return Object.entries(porAutor)
+    .map(([jid, itens]) => ({
+      autor_jid: jid,
+      nome: nomeDoContato(jid) || formatarNumero(jid),
+      itens,
+      ultimo_ts: itens[itens.length - 1].timestamp,
+    }))
+    .sort((a, b) => b.ultimo_ts - a.ultimo_ts);
 }
 
 function listarConversas() {
@@ -153,6 +267,13 @@ module.exports = {
   listarConversas,
   marcarLidas,
   definirNomeContato,
+  limparNomeIgual,
+  listarLids,
+  unificarLid,
+  ultimaMensagem,
+  apagarConversa,
+  salvarStatus,
+  listarStatus,
   salvarMensagem,
   marcarComoApagada,
   listarMensagens,

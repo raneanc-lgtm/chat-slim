@@ -120,6 +120,20 @@ app.post('/api/conversas/:jid/midia', upload.single('arquivo'), async (req, res)
   }
 });
 
+// Apagar conversa (no WhatsApp também, como no WhatsApp Web)
+app.post('/api/conversas/:jid/apagar', async (req, res) => {
+  try {
+    res.json(await motor.apagarConversa(decodeURIComponent(req.params.jid)));
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// Status (stories) das últimas 24h, agrupados por contato
+app.get('/api/status-contatos', (req, res) => {
+  res.json(db.listarStatus());
+});
+
 // Marcar conversa como lida
 app.post('/api/conversas/:jid/lidas', (req, res) => {
   db.marcarLidas(decodeURIComponent(req.params.jid));

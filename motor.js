@@ -14,6 +14,7 @@ const {
   fetchLatestBaileysVersion,
   downloadMediaMessage,
   normalizeMessageContent,
+  jidNormalizedUser,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
@@ -84,6 +85,43 @@ async function salvarMidiaSeHouver(m, conteudo, tipo) {
   }
 }
 
+// O WhatsApp novo identifica a mesma pessoa de dois jeitos: pelo número (@s.whatsapp.net)
+// e por um código interno (@lid). Aqui tudo vira o número, pra não duplicar conversa
+// nem perder o nome salvo na agenda.
+const mapaLid = new Map(db.listarLids().map((x) => [x.lid, x.pn]));
+function normalizar(jid) {
+  try {
+    return jid && !jid.endsWith('@g.us') ? jidNormalizedUser(jid) : jid;
+  } catch (_) {
+    return jid;
+  }
+}
+function lembrarLid(lid, pn) {
+  lid = normalizar(lid);
+  pn = normalizar(pn);
+  if (!lid || !pn || !lid.endsWith('@lid') || !pn.endsWith('@s.whatsapp.net')) return;
+  if (mapaLid.get(lid) === pn) return;
+  mapaLid.set(lid, pn);
+  db.unificarLid(lid, pn);
+}
+async function paraNumero(jid, alt) {
+  jid = normalizar(jid);
+  if (!jid || !jid.endsWith('@lid')) return jid;
+  if (alt && normalizar(alt).endsWith('@s.whatsapp.net')) {
+    lembrarLid(jid, alt);
+    return normalizar(alt);
+  }
+  if (mapaLid.has(jid)) return mapaLid.get(jid);
+  try {
+    const pn = await socketAtual?.signalRepository?.lidMapping?.getPNForLID(jid);
+    if (pn) {
+      lembrarLid(jid, pn);
+      return normalizar(pn);
+    }
+  } catch (_) {}
+  return jid;
+}
+
 function ignorarConversa(jid) {
   return !jid || jid === 'status@broadcast' || jid.endsWith('@broadcast') || jid.endsWith('@newsletter');
 }
@@ -109,17 +147,19 @@ async function garantirNomeDoGrupo(jid) {
  */
 async function processarMensagem(m, tempoReal) {
   if (!m || !m.message || !m.key) return;
-  const conversaJid = m.key.remoteJid;
-  if (ignorarConversa(conversaJid)) return;
+  if (m.key.remoteJid === 'status@broadcast' || m.broadcast) return processarStatus(m, tempoReal);
+  if (ignorarConversa(m.key.remoteJid)) return;
 
   const conteudo = normalizeMessageContent(m.message) || m.message;
   if (conteudo.protocolMessage || conteudo.reactionMessage || conteudo.pollUpdateMessage) return;
   const tipo = detectarTipo(conteudo);
   if (tipo === 'outro') return;
 
+  const conversaJid = await paraNumero(m.key.remoteJid, m.key.remoteJidAlt);
   const ehGrupo = conversaJid.endsWith('@g.us');
   const deMim = Boolean(m.key.fromMe);
-  const remetenteJid = ehGrupo ? m.key.participant : conversaJid;
+  const remetenteJid = ehGrupo ? await paraNumero(m.key.participant, m.key.participantAlt) : conversaJid;
+  if (ehGrupo && !deMim && remetenteJid && m.pushName) db.definirNomeContato(remetenteJid, m.pushName, 'perfil');
   const texto = extrairTexto(conteudo);
   const timestamp = (Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
 
@@ -163,6 +203,55 @@ async function processarMensagem(m, tempoReal) {
   }
 }
 
+// Agenda (nome que VOCÊ salvou) vale mais que o nome que a pessoa pôs no perfil
+function salvarContatosLista(lista) {
+  let mudou = false;
+  for (const c of lista || []) {
+    if (!c || !c.id) continue;
+    if (c.lid && c.phoneNumber) lembrarLid(c.lid, c.phoneNumber);
+    else if (c.id.endsWith('@lid') && c.phoneNumber) lembrarLid(c.id, c.phoneNumber);
+    else if (c.lid && c.id.endsWith('@s.whatsapp.net')) lembrarLid(c.lid, c.id);
+    const alvo = normalizar(c.phoneNumber || mapaLid.get(normalizar(c.id)) || c.id);
+    if (c.name) { db.definirNomeContato(alvo, c.name, 'agenda'); mudou = true; }
+    const perfil = c.notify || c.verifiedName;
+    if (perfil) { db.definirNomeContato(alvo, perfil, 'perfil'); mudou = true; }
+  }
+  return mudou;
+}
+
+// ---- Status (stories): ficam separados das conversas, valem 24h ----
+const DIA = 24 * 60 * 60 * 1000;
+async function processarStatus(m, tempoReal) {
+  if (m.key.fromMe) return; // os seus próprios status ficam no WhatsApp oficial
+  const conteudo = normalizeMessageContent(m.message) || m.message;
+  if (!conteudo || conteudo.protocolMessage || conteudo.reactionMessage) return;
+  const tipo = detectarTipo(conteudo);
+  if (tipo === 'outro') return;
+  const timestamp = (Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
+  if (Date.now() - timestamp > DIA) return;
+  const autor = await paraNumero(m.key.participant, m.key.participantAlt);
+  if (!autor) return;
+  if (m.pushName) db.definirNomeContato(autor, m.pushName, 'perfil');
+
+  let midia = { path: null, mimetype: null };
+  const info = conteudo[CHAVE_DO_TIPO[tipo]] || {};
+  const grande = Number(info.fileLength || 0) > 20 * 1024 * 1024;
+  if (CHAVE_DO_TIPO[tipo] && !grande) midia = await salvarMidiaSeHouver(m, conteudo, tipo);
+
+  const fundo = conteudo.extendedTextMessage?.backgroundArgb;
+  db.salvarStatus({
+    id: m.key.id,
+    autor_jid: autor,
+    tipo,
+    texto: extrairTexto(conteudo),
+    midia_path: midia.path,
+    midia_mimetype: midia.mimetype,
+    cor_fundo: fundo ? '#' + (fundo >>> 0).toString(16).padStart(8, '0').slice(2) : null,
+    timestamp,
+  });
+  if (tempoReal) emitir({ tipo: 'status_novo', autor });
+}
+
 async function iniciar() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -196,6 +285,11 @@ async function iniciar() {
       }
     } else if (connection === 'open') {
       statusConexao = 'conectado';
+      try {
+        const eu = sock.user || {};
+        if (eu.lid && eu.id) lembrarLid(eu.lid, eu.id);
+        if (eu.name) db.limparNomeIgual(eu.name);
+      } catch (_) {}
       ultimoQR = null;
       emitir({ tipo: 'status', status: 'conectado' });
     }
@@ -218,16 +312,14 @@ async function iniciar() {
   // ---- Histórico que o WhatsApp manda ao conectar (conversas, contatos, mensagens recentes) ----
   sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
     try {
-      for (const c of contacts || []) {
-        const nome = c.name || c.notify || c.verifiedName;
-        if (c.id && nome) db.definirNomeContato(c.id, nome);
-      }
+      salvarContatosLista(contacts);
       for (const ch of chats || []) {
         if (ignorarConversa(ch.id)) continue;
-        db.upsertConversa({ jid: ch.id, nome: null, ehGrupo: ch.id.endsWith('@g.us') });
-        if (ch.name) db.definirNomeContato(ch.id, ch.name);
+        const jid = await paraNumero(ch.id, ch.pnJid);
+        db.upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') });
+        if (ch.name) db.definirNomeContato(jid, ch.name, jid.endsWith('@g.us') ? 'grupo' : 'agenda');
         const ts = Number(ch.conversationTimestamp || 0) * 1000;
-        if (ts) db.atualizarUltimaMensagem(ch.id, null, ts);
+        if (ts) db.atualizarUltimaMensagem(jid, null, ts);
       }
       for (const m of messages || []) await processarMensagem(m, false);
       emitir({ tipo: 'conversas' });
@@ -236,22 +328,23 @@ async function iniciar() {
     }
   });
 
-  // ---- Nomes dos contatos (agenda do celular / nome do perfil) ----
+  // ---- Nomes dos contatos ----
   const salvarContatos = (lista) => {
-    let mudou = false;
-    for (const c of lista || []) {
-      const nome = c.name || c.notify || c.verifiedName;
-      if (c.id && nome) {
-        db.definirNomeContato(c.id, nome);
-        mudou = true;
-      }
-    }
-    if (mudou) emitir({ tipo: 'conversas' });
+    if (salvarContatosLista(lista)) emitir({ tipo: 'conversas' });
   };
   sock.ev.on('contacts.upsert', salvarContatos);
   sock.ev.on('contacts.update', salvarContatos);
   sock.ev.on('groups.update', (lista) => {
-    for (const g of lista || []) if (g.id && g.subject) db.definirNomeContato(g.id, g.subject);
+    for (const g of lista || []) if (g.id && g.subject) db.definirNomeContato(g.id, g.subject, 'grupo');
+    emitir({ tipo: 'conversas' });
+  });
+  sock.ev.on('lid-mapping.update', (lista) => {
+    for (const x of [].concat(lista || [])) if (x && x.lid && x.pn) lembrarLid(x.lid, x.pn);
+  });
+
+  // ---- Conversa apagada no celular → some daqui também ----
+  sock.ev.on('chats.delete', async (jids) => {
+    for (const j of jids || []) db.apagarConversa(await paraNumero(j));
     emitir({ tipo: 'conversas' });
   });
 
@@ -259,16 +352,18 @@ async function iniciar() {
   sock.ev.on('messages.update', (updates) => {
     for (const u of updates) {
       // quando a própria mensagem é marcada como "revoked" (apagada pra todos)
-      if (u.update?.message === null || u.update?.messageStubType === 'REVOKE') {
+      if (u.update?.message === null || u.update?.messageStubType === 'REVOKE' || u.update?.messageStubType === 1) {
         db.marcarComoApagada(u.key.id);
-        emitir({ tipo: 'mensagem_apagada', id: u.key.id, conversaJid: u.key.remoteJid });
+        const jid = mapaLid.get(normalizar(u.key.remoteJid)) || normalizar(u.key.remoteJidAlt) || u.key.remoteJid;
+        emitir({ tipo: 'mensagem_apagada', id: u.key.id, conversaJid: jid });
       }
     }
   });
 
   // ---- Presença (online/offline/digitando) ----
-  sock.ev.on('presence.update', ({ id, presences }) => {
-    for (const [participanteJid, info] of Object.entries(presences)) {
+  sock.ev.on('presence.update', async ({ id, presences }) => {
+    for (const [jidBruto, info] of Object.entries(presences)) {
+      const participanteJid = await paraNumero(jidBruto);
       const status = info.lastKnownPresence; // available, unavailable, composing, recording
       const mapa = {
         available: 'online',
@@ -357,6 +452,35 @@ async function assinarPresenca(jid) {
   } catch (_) {}
 }
 
+async function apagarConversa(jid) {
+  const ult = db.ultimaMensagem(jid);
+  let noWhatsApp = false;
+  let erro = null;
+  if (socketAtual && statusConexao === 'conectado') {
+    try {
+      const lastMessages = ult
+        ? [{
+            key: {
+              remoteJid: jid,
+              id: ult.id,
+              fromMe: !!ult.de_mim,
+              participant: jid.endsWith('@g.us') && !ult.de_mim ? ult.remetente_jid : undefined,
+            },
+            messageTimestamp: Math.floor(ult.timestamp / 1000),
+          }]
+        : [];
+      await socketAtual.chatModify({ delete: true, lastMessages }, jid);
+      noWhatsApp = true;
+    } catch (e) {
+      erro = e.message;
+      console.error('Não apagou no WhatsApp:', e.message);
+    }
+  }
+  db.apagarConversa(jid);
+  emitir({ tipo: 'conversas' });
+  return { noWhatsApp, erro };
+}
+
 async function enviarMensagem(jid, texto) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
@@ -394,6 +518,7 @@ module.exports = {
   enviarMidia,
   pedirCodigoPareamento,
   assinarPresenca,
+  apagarConversa,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
   getQR: () => ultimoQR,
