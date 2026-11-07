@@ -28,7 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends Activity {
-    private static final String ENDERECO = "http://127.0.0.1:3000";
+    private String ENDERECO = "http://127.0.0.1:3000";
     private static final int REQ_PERMISSOES = 10;
     private static final int REQ_ARQUIVO = 20;
     private static final int REQ_MICROFONE = 30;
@@ -60,6 +60,7 @@ public class MainActivity extends Activity {
     }
 
     private void criarTela() {
+        ENDERECO = Config.endereco(this);
         Window w = getWindow();
         w.setStatusBarColor(Color.parseColor("#0e1621"));
         w.setNavigationBarColor(Color.parseColor("#0e1621"));
@@ -297,7 +298,10 @@ public class MainActivity extends Activity {
                 "(function(){var b=document.getElementById('btn-voltar');"
               + "if(b&&b.offsetParent!==null){b.click();return true;}return false;})()",
                 valor -> {
-                    if (!"true".equals(valor)) moveTaskToBack(true);
+                    if ("true".equals(valor)) return;
+                    // embutido no Radinho: volta pro rádio; avulso: só minimiza (motor segue ligado)
+                    if (Config.embutido(this)) finish();
+                    else moveTaskToBack(true);
                 });
     }
 }

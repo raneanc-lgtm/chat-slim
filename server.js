@@ -12,7 +12,7 @@ const { webmParaOgg, ehWebm } = require('./audio-ogg');
 const db = require('./db');
 
 const app = express();
-const PORTA = 3000;
+const PORTA = Number(process.env.CHATSLIM_PORTA) || 3000;
 
 const BASE_DIR_GRAVAVEL = process.env.NODEJS_MOBILE_APP_STORAGE || __dirname;
 const UPLOAD_TEMP_DIR = path.join(BASE_DIR_GRAVAVEL, 'dados', 'upload_temp');

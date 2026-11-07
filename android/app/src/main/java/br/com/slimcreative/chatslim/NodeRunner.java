@@ -43,6 +43,7 @@ public final class NodeRunner {
                 Os.setenv("NODEJS_MOBILE_APP_STORAGE", app.getFilesDir().getAbsolutePath(), true);
                 Os.setenv("TMPDIR", app.getCacheDir().getAbsolutePath(), true);
                 Os.setenv("HOME", app.getFilesDir().getAbsolutePath(), true);
+                Os.setenv("CHATSLIM_PORTA", String.valueOf(Config.porta(app)), true);
 
                 String principal = new File(destino, "main.js").getAbsolutePath();
                 int codigo = startNode(new String[]{"node", principal});

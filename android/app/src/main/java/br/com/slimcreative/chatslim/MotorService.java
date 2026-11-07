@@ -15,7 +15,7 @@ import android.os.IBinder;
  * e guardando as apagadas mesmo com o app minimizado).
  */
 public class MotorService extends Service {
-    private static final String CANAL = "motor";
+    private static final String CANAL = "chatslim_motor";
 
     @Override
     public void onCreate() {
@@ -26,7 +26,7 @@ public class MotorService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel canal = new NotificationChannel(CANAL, "Conexão do Chat Slim", NotificationManager.IMPORTANCE_MIN);
+            NotificationChannel canal = new NotificationChannel(CANAL, "Conexão do WhatsApp (Chat Slim)", NotificationManager.IMPORTANCE_MIN);
             getSystemService(NotificationManager.class).createNotificationChannel(canal);
         }
         PendingIntent abrir = PendingIntent.getActivity(this, 0,
@@ -36,16 +36,16 @@ public class MotorService extends Service {
                 ? new Notification.Builder(this, CANAL)
                 : new Notification.Builder(this);
         Notification n = b.setSmallIcon(android.R.drawable.stat_notify_chat)
-                .setContentTitle("Chat Slim")
+                .setContentTitle("WhatsApp (Chat Slim)")
                 .setContentText("Conectado em segundo plano")
                 .setContentIntent(abrir)
                 .setOngoing(true)
                 .build();
 
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            startForeground(7301, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else {
-            startForeground(1, n);
+            startForeground(7301, n);
         }
         return START_STICKY;
     }
