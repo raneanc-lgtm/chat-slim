@@ -36,6 +36,7 @@ def main():
     ap.add_argument('--chatslim', required=True)
     ap.add_argument('--app-html', required=True)
     ap.add_argument('--saida', required=True)
+    ap.add_argument('--teste', action='store_true', help='build de teste: depurável (permite ler o log no emulador)')
     a = ap.parse_args()
 
     tmp = tempfile.mkdtemp(prefix='montar-radinho-')
@@ -117,6 +118,8 @@ def main():
         <meta-data android:name="chatslim.embutido" android:value="true"/>
     </application>'''
     m = m.replace('</application>', componentes, 1)
+    if a.teste:
+        m = m.replace('<application ', '<application android:debuggable="true" ', 1)
     open(mpath, 'w', encoding='utf-8').write(m)
 
     os.makedirs(os.path.join(rad, 'res', 'xml'), exist_ok=True)

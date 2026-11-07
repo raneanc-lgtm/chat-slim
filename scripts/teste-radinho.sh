@@ -18,7 +18,7 @@ adb install -r -g teste/Radinho-master.apk && echo "INSTALOU POR CIMA: OK" || ec
 echo "versão depois: $(adb shell dumpsys package $PKG | grep -m1 versionCode)"
 adb logcat -c
 adb shell am start -W -n $PKG/.MainActivity
-sleep 75
+sleep 150
 adb exec-out screencap -p > $R/2-radinho-master.png
 echo "===== PROCESSOS ====="
 adb shell pidof $PKG && echo "RADINHO: VIVO" || echo "RADINHO: MORREU"
@@ -31,11 +31,12 @@ curl -s -m 5 http://127.0.0.1:3010/api/status | head -c 120; echo
 echo "===== motor.log ====="
 adb shell run-as $PKG cat files/motor.log
 adb shell run-as $PKG cat files/crash-motor.txt 2>/dev/null
+adb shell run-as $PKG ls -la files files/nodejs-project 2>&1 | head -20
 
 echo "===== 3) Abrindo a tela do WhatsApp ====="
 adb root >/dev/null 2>&1; sleep 3
 adb shell am start -W -n $PKG/br.com.slimcreative.chatslim.MainActivity
-sleep 12
+sleep 35
 adb exec-out screencap -p > $R/3-tela-whatsapp.png
 adb shell dumpsys activity activities | grep -E "topResumedActivity" | head -2
 adb shell input keyevent KEYCODE_BACK
