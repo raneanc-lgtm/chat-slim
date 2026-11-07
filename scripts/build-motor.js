@@ -63,6 +63,20 @@ async function empacotar() {
   });
   fs.cpSync(path.join(raiz, 'public'), path.join(saida, 'public'), { recursive: true });
 
+  // versao.json: número da versão + SHA-256 de cada arquivo (usado na atualização automática)
+  const versao = Number(process.env.MOTOR_VERSAO || 0);
+  const arquivos = {};
+  const listar = (dir, pref = '') => {
+    for (const n of fs.readdirSync(dir)) {
+      const p = path.join(dir, n), rel = pref + n;
+      if (fs.statSync(p).isDirectory()) listar(p, rel + '/');
+      else if (n !== 'versao.json') arquivos[rel] = require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+    }
+  };
+  listar(saida);
+  fs.writeFileSync(path.join(saida, 'versao.json'), JSON.stringify({ versao, arquivos }, null, 1));
+  console.log(`✔ versao.json: motor versão ${versao} (${Object.keys(arquivos).length} arquivos)`);
+
   const app = fs.readFileSync(path.join(saida, 'app.js'), 'utf8');
   const restantes = (app.match(/\/[^\n/]*\\[pP]\{[^}]+\}[^\n/]*\/[a-z]*u[a-z]*/g) || []);
   if (restantes.length) {

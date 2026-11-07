@@ -30,6 +30,7 @@ const AUTH_DIR = path.join(BASE_DIR, 'auth_info');
 let socketAtual = null;
 let ultimoQR = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
+let envios = 0; // envios em andamento (a atualização espera zerar pra reiniciar)
 
 // callbacks pra avisar o servidor web de eventos novos (SSE)
 const ouvintes = new Set();
@@ -290,6 +291,12 @@ async function iniciar() {
         if (eu.lid && eu.id) lembrarLid(eu.lid, eu.id);
         if (eu.name) db.limparNomeIgual(eu.name);
       } catch (_) {}
+      // Agenda completa: o WhatsApp só manda na 1ª conexão (e às vezes não dá tempo).
+      // Se ainda tem poucos contatos salvos, pede de novo.
+      setTimeout(() => {
+        if (socketAtual === sock && db.contarContatosAgenda() < 15) sincronizarContatos().catch(() => {});
+      }, 15000);
+      setTimeout(() => { if (socketAtual === sock) atualizarVigia(); }, 5000);
       ultimoQR = null;
       emitir({ tipo: 'status', status: 'conectado' });
     }
@@ -372,6 +379,8 @@ async function iniciar() {
         recording: 'gravando',
       };
       const statusTraduzido = mapa[status] || status;
+      const antes = (db.obterPresenca(participanteJid) || {}).status;
+      if (statusTraduzido === 'online' && antes !== 'online' && antes !== 'digitando' && antes !== 'gravando') avisarOnline(participanteJid);
       db.atualizarPresenca(participanteJid, statusTraduzido);
       emitir({ tipo: 'presenca', jid: participanteJid, status: statusTraduzido });
     }
@@ -386,6 +395,8 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
   }
   db.upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') });
 
+  envios++;
+  try {
   const buffer = fs.readFileSync(caminhoArquivo);
   let conteudo;
 
@@ -429,6 +440,9 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
   emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto: legenda, tipoMsg: tipoMensagem });
 
   return resultado;
+  } finally {
+    envios--;
+  }
 }
 
 // Conexão pelo número de telefone (pra quando o WhatsApp está no mesmo celular
@@ -451,6 +465,79 @@ async function assinarPresenca(jid) {
   try {
     await socketAtual.presenceSubscribe(jid);
   } catch (_) {}
+}
+
+// ---- Agenda completa (pede ao WhatsApp a sincronização dos contatos) ----
+async function sincronizarContatos() {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  const antes = db.contarContatosAgenda();
+  await socketAtual.resyncAppState(['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'], true);
+  const depois = db.contarContatosAgenda();
+  console.log(`Contatos sincronizados: ${antes} → ${depois}`);
+  emitir({ tipo: 'conversas' });
+  return { antes, depois };
+}
+
+// ---- Foto de perfil (guardada no aparelho por 1 dia) ----
+const fotosSemFoto = new Map(); // jid -> quando conferiu (pra não perguntar toda hora)
+const FOTOS_DIR = path.join(db.MIDIA_DIR, 'fotos');
+let fotosEmAndamento = 0;
+async function fotoDePerfil(jid) {
+  const arq = path.join(FOTOS_DIR, jid.replace(/[^0-9a-zA-Z@._-]/g, '_') + '.jpg');
+  try {
+    const st = fs.statSync(arq);
+    if (Date.now() - st.mtimeMs < 24 * 3600 * 1000) return 'fotos/' + path.basename(arq) + '?v=' + Math.floor(st.mtimeMs);
+  } catch (_) {}
+  const sem = fotosSemFoto.get(jid);
+  if (sem && Date.now() - sem < 6 * 3600 * 1000) return null;
+  if (!socketAtual || statusConexao !== 'conectado' || fotosEmAndamento >= 3) return null;
+  fotosEmAndamento++;
+  try {
+    const url = await socketAtual.profilePictureUrl(jid, 'preview', 8000).catch(() => null);
+    if (!url) {
+      fotosSemFoto.set(jid, Date.now());
+      return null;
+    }
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    fs.mkdirSync(FOTOS_DIR, { recursive: true });
+    fs.writeFileSync(arq, Buffer.from(await r.arrayBuffer()));
+    return 'fotos/' + path.basename(arq) + '?v=' + Date.now();
+  } catch (_) {
+    return null;
+  } finally {
+    fotosEmAndamento--;
+  }
+}
+
+// ---- Aviso quando um contato escolhido fica online ----
+// O WhatsApp só conta pra você quem está online se você também estiver visível,
+// então, enquanto houver alguém na lista de aviso, o motor fica "disponível".
+const ultimoAvisoOnline = new Map();
+function avisarOnline(jid) {
+  if (!db.estaVigiado(jid)) return;
+  const ult = ultimoAvisoOnline.get(jid) || 0;
+  if (Date.now() - ult < 10 * 60 * 1000) return; // no máximo 1 aviso a cada 10 min por pessoa
+  ultimoAvisoOnline.set(jid, Date.now());
+  const nome = db.nomeDe(jid);
+  console.log('Online agora:', nome);
+  emitir({ tipo: 'alerta_online', jid, nome });
+}
+let vigiaTimer = null;
+async function atualizarVigia() {
+  clearTimeout(vigiaTimer);
+  if (!socketAtual || statusConexao !== 'conectado') return;
+  const lista = db.listarVigiados();
+  try {
+    await socketAtual.sendPresenceUpdate(lista.length ? 'available' : 'unavailable');
+    for (const j of lista) await socketAtual.presenceSubscribe(j).catch(() => {});
+  } catch (_) {}
+  if (lista.length) vigiaTimer = setTimeout(atualizarVigia, 4 * 60 * 1000);
+}
+function definirVigia(jid, ligar) {
+  db.definirVigiado(jid, ligar);
+  atualizarVigia();
+  return { vigiados: db.listarVigiados() };
 }
 
 // Confere se um número tem WhatsApp (pra iniciar conversa nova)
@@ -531,6 +618,10 @@ module.exports = {
   assinarPresenca,
   apagarConversa,
   verificarNumero,
+  sincronizarContatos,
+  fotoDePerfil,
+  definirVigia,
+  enviosEmAndamento: () => envios,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
   getQR: () => ultimoQR,

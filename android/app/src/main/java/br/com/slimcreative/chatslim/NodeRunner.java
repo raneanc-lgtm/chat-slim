@@ -53,7 +53,9 @@ public final class NodeRunner {
                 cfg.put("HOME", app.getFilesDir().getAbsolutePath());
                 cfg.put("CHATSLIM_PORTA", String.valueOf(Config.porta(app)));
 
-                String principal = new File(destino, "main.js").getAbsolutePath();
+                // Usa a versão do motor atualizada online (motor-ota), se for mais nova que a do APK
+                File pastaMotor = escolherVersao(app, destino);
+                String principal = new File(pastaMotor, "main.js").getAbsolutePath();
                 int codigo = startNode(new String[]{"node", principal, "--chatslim-config", cfg.toString()});
                 Log.e(TAG, "Node encerrou com código " + codigo);
                 ChatSlimApp.registrar(app, "crash-motor.txt", "O motor Node parou",
@@ -64,6 +66,53 @@ public final class NodeRunner {
             }
         }, "node-motor", 16L * 1024 * 1024);
         t.start();
+    }
+
+    private static String lerTexto(File f) throws Exception {
+        try (InputStream in = new java.io.FileInputStream(f)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toString("UTF-8");
+        }
+    }
+
+    private static int lerVersao(File pasta) {
+        try {
+            return new org.json.JSONObject(lerTexto(new File(pasta, "versao.json"))).optInt("versao", 0);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Motor atualizado online fica em files/motor-ota. Só é usado se for mais novo que o do APK.
+     * Se ele não abrir 3 vezes seguidas (o motor apaga "ota-tentativas" quando sobe ok), é descartado.
+     */
+    private static File escolherVersao(Context ctx, File doApk) {
+        File ota = new File(ctx.getFilesDir(), "motor-ota");
+        if (!new File(ota, "main.js").exists() || !new File(ota, "app.js").exists()) return doApk;
+        if (lerVersao(ota) <= lerVersao(doApk)) {
+            apagar(ota);
+            return doApk;
+        }
+        File cont = new File(ctx.getFilesDir(), "ota-tentativas");
+        int n = 0;
+        try {
+            n = Integer.parseInt(lerTexto(cont).trim());
+        } catch (Exception ignored) {}
+        if (n >= 3) {
+            Log.e(TAG, "Motor online falhou 3 vezes, voltando pro do APK");
+            apagar(ota);
+            cont.delete();
+            return doApk;
+        }
+        try (FileOutputStream o = new FileOutputStream(cont)) {
+            o.write(String.valueOf(n + 1).getBytes("UTF-8"));
+        } catch (Exception ignored) {}
+        Log.i(TAG, "Usando motor atualizado online, versão " + lerVersao(ota));
+        return ota;
     }
 
     /** Copia o motor dos assets pro armazenamento interno quando o app é instalado/atualizado. */

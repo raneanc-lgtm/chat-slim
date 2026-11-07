@@ -31,6 +31,8 @@ jobs:
 
       - name: Empacotar o motor (Baileys + servidor) para o Android
         run: npm run build:motor
+        env:
+          MOTOR_VERSAO: ${{ github.run_number }}
 
       - name: Baixar o Node.js para Android (nodejs-mobile 18.20.4)
         run: |
@@ -75,3 +77,14 @@ jobs:
           git add ChatSlim.apk
           git commit -q -m "APK de ${GITHUB_SHA::7}"
           git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk
+
+      - name: Publicar o motor pra atualização automática (branch "motor")
+        run: |
+          mkdir /tmp/motor-branch && cp -r android/app/src/main/assets/nodejs-project/. /tmp/motor-branch/
+          cd /tmp/motor-branch
+          git init -q -b motor
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Motor ${{ github.run_number }} (${GITHUB_SHA::7})"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" motor

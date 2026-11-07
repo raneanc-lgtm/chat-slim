@@ -8,6 +8,7 @@ const multer = require('multer');
 const qrcode = require('qrcode');
 
 const motor = require('./motor');
+const atualizador = require('./atualizador');
 const { webmParaOgg, ehWebm } = require('./audio-ogg');
 const db = require('./db');
 
@@ -134,6 +135,28 @@ app.get('/api/contatos', (req, res) => {
   res.json(db.listarContatos());
 });
 
+// Pedir a agenda completa ao WhatsApp
+app.post('/api/sincronizar-contatos', async (req, res) => {
+  try {
+    res.json(await motor.sincronizarContatos());
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// Foto de perfil (devolve o caminho dentro de /midia, ou null)
+app.get('/api/foto/:jid', async (req, res) => {
+  res.json({ foto: await motor.fotoDePerfil(decodeURIComponent(req.params.jid)) });
+});
+
+// Aviso quando o contato ficar online
+app.get('/api/vigiados', (req, res) => {
+  res.json(db.listarVigiados());
+});
+app.post('/api/vigiados/:jid', (req, res) => {
+  res.json(motor.definirVigia(decodeURIComponent(req.params.jid), !!(req.body && req.body.ligar)));
+});
+
 // Verifica se um número tem WhatsApp
 app.post('/api/numero', async (req, res) => {
   try {
@@ -145,6 +168,9 @@ app.post('/api/numero', async (req, res) => {
     res.status(500).json({ erro: err.message });
   }
 });
+
+// Versão do motor
+app.get('/api/versao', (req, res) => res.json({ motor: atualizador.versaoAtual() }));
 
 // Status (stories) das últimas 24h, agrupados por contato
 app.get('/api/status-contatos', (req, res) => {
@@ -212,6 +238,7 @@ app.get('/api/eventos', (req, res) => {
 // só aceita conexões do próprio celular (ninguém da mesma rede Wi-Fi acessa)
 app.listen(PORTA, '127.0.0.1', () => {
   console.log(`\n🚀 Chat Slim rodando! Abra no navegador: http://127.0.0.1:${PORTA}\n`);
+  atualizador.marcarInicioOk(() => motor.enviosEmAndamento() === 0);
 });
 
 motor.iniciar().catch((err) => {

@@ -22,6 +22,7 @@ public class MotorService extends Service {
     public void onCreate() {
         super.onCreate();
         NodeRunner.iniciar(this);
+        AvisosZap.iniciar(this);
     }
 
     @Override

@@ -29,7 +29,7 @@ if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 const adapter = new FileSync(path.join(DATA_DIR, 'chatslim.json'));
 const db = low(adapter);
 
-db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [] }).write();
+db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [], vigiados: [] }).write();
 
 // Limpeza de dados antigos: versões anteriores guardavam status e canais como se fossem conversa
 (function limparLixo() {
@@ -154,6 +154,26 @@ function unificarLid(lid, pn) {
   // status
   db.get('status').filter({ autor_jid: lid }).value()
     .forEach((x) => db.get('status').find({ id: x.id }).assign({ autor_jid: pn }).write());
+}
+
+function contarContatosAgenda() {
+  return db.get('contatos').filter((c) => !!c.nome_agenda).size().value();
+}
+
+function nomeDe(jid) {
+  return nomeDoContato(jid) || formatarNumero(jid);
+}
+
+// ---- Contatos com aviso de online ----
+function listarVigiados() {
+  return db.get('vigiados').map('jid').value();
+}
+function estaVigiado(jid) {
+  return !!db.get('vigiados').find({ jid }).value();
+}
+function definirVigiado(jid, ligar) {
+  if (ligar && !estaVigiado(jid)) db.get('vigiados').push({ jid }).write();
+  if (!ligar) db.get('vigiados').remove({ jid }).write();
 }
 
 // ---- Contatos pra iniciar conversa (só os que têm número e nome) ----
@@ -281,6 +301,11 @@ module.exports = {
   ultimaMensagem,
   apagarConversa,
   listarContatos,
+  contarContatosAgenda,
+  nomeDe,
+  listarVigiados,
+  estaVigiado,
+  definirVigiado,
   salvarStatus,
   listarStatus,
   salvarMensagem,
