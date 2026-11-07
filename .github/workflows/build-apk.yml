@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -61,3 +64,14 @@ jobs:
           name: ChatSlim-apk
           path: ChatSlim.apk
           retention-days: 30
+
+      - name: Guardar APK no branch "apk" (para baixar direto)
+        run: |
+          mkdir /tmp/apk-branch && cp ChatSlim.apk /tmp/apk-branch/
+          cd /tmp/apk-branch
+          git init -q -b apk
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add ChatSlim.apk
+          git commit -q -m "APK de ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk
