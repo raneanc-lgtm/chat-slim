@@ -31,6 +31,7 @@ const BASE_DIR = process.env.NODEJS_MOBILE_APP_STORAGE || __dirname;
 const AUTH_DIR = path.join(BASE_DIR, 'auth_info');
 
 let socketAtual = null;
+let primeiroInicio = true;
 let falhasSeguidas = 0; // quedas seguidas sem chegar no QR nem conectar
 let ultimoQR = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
@@ -338,6 +339,20 @@ async function processarStatus(m, tempoReal) {
 }
 
 async function iniciar() {
+  // Ao ligar o motor: se ficou no modo celular sem nunca ter conectado, volta pro modo computador
+  // (assim o app nunca abre preso em "Conectando..." por causa do modo experimental)
+  if (primeiroInicio) {
+    primeiroInicio = false;
+    try {
+      const credsArq = path.join(AUTH_DIR, 'creds.json');
+      const registrado = fs.existsSync(credsArq) && JSON.parse(fs.readFileSync(credsArq, 'utf8')).registered;
+      if (db.obterConfig().modo_celular && !registrado) {
+        console.log('[conexão] motor ligou no modo celular sem conexão: voltando pro modo computador');
+        db.definirConfig({ modo_celular: false });
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      }
+    } catch (e) { console.log('[conexão] checagem do modo:', e.message); }
+  }
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
