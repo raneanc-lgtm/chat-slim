@@ -169,6 +169,12 @@ app.post('/api/numero', async (req, res) => {
   }
 });
 
+// Conferir atualização do motor agora (o app chama ao abrir a aba Zap)
+app.post('/api/atualizar', (req, res) => {
+  atualizador.checar();
+  res.json({ ok: true, motor: atualizador.versaoAtual() });
+});
+
 // Versão do motor
 app.get('/api/versao', (req, res) => res.json({ motor: atualizador.versaoAtual() }));
 

@@ -34,8 +34,11 @@ async function baixar(url) {
 let ocupado = false;
 let reiniciarAntes = null; // função que diz se dá pra reiniciar agora (ex.: não está enviando nada)
 
+let ultimaChecagem = 0;
 async function checar() {
   if (ocupado || !BASE) return;
+  if (Date.now() - ultimaChecagem < 2 * 60 * 1000) return; // no máximo a cada 2 min
+  ultimaChecagem = Date.now();
   ocupado = true;
   try {
     const remoto = JSON.parse((await baixar(URL_BASE + 'versao.json')).toString('utf8'));
