@@ -208,7 +208,13 @@ function listarContatos() {
       porJid[jid] = { jid, nome, agenda, numero: jid.endsWith('@lid') ? 'contato do WhatsApp' : formatarNumero(jid) };
     }
   }
-  return Object.values(porJid).sort((a, b) => (b.agenda - a.agenda) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  // quem você já conversou, mesmo sem nome salvo, também entra (aparece pelo número)
+  for (const cv of db.get('conversas').value()) {
+    const jid = cv.jid || '';
+    if (!jid.endsWith('@s.whatsapp.net') || porJid[jid]) continue;
+    porJid[jid] = { jid, nome: cv.nome || formatarNumero(jid), agenda: false, semNome: !cv.nome, numero: formatarNumero(jid) };
+  }
+  return Object.values(porJid).sort((a, b) => (b.agenda - a.agenda) || ((a.semNome ? 1 : 0) - (b.semNome ? 1 : 0)) || a.nome.localeCompare(b.nome, 'pt-BR'));
 }
 
 function lidsSemNumero() {

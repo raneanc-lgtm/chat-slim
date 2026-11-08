@@ -157,6 +157,11 @@ app.post('/api/contatos/recuperar', async (req, res) => {
   catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
+app.post('/api/reconectar-completo', async (req, res) => {
+  try { res.json(await motor.reconectarCompleto()); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // Pedir a agenda completa ao WhatsApp
 app.post('/api/sincronizar-contatos', async (req, res) => {
   try {

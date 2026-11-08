@@ -17,6 +17,7 @@ const {
   jidNormalizedUser,
   BufferJSON,
   generateWAMessageFromContent,
+  Browsers,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
@@ -212,6 +213,17 @@ async function encaminhar(msgId, destino) {
  *   tempoReal = true  → chegou agora (baixa a mídia, conta como não lida, avisa a tela)
  *   tempoReal = false → veio do histórico ao conectar (só registra, sem baixar mídia)
  */
+// pega só o nome (perfil) de quem mandou a mensagem — usado no histórico antigo
+async function colherNome(m) {
+  try {
+    if (!m || !m.key || m.key.fromMe || !m.pushName) return;
+    const rj = m.key.remoteJid || '';
+    if (rj === 'status@broadcast' || rj.endsWith('@newsletter') || rj.endsWith('@broadcast')) return;
+    const quem = rj.endsWith('@g.us') ? await paraNumero(m.key.participant, m.key.participantAlt) : await paraNumero(rj, m.key.remoteJidAlt);
+    if (quem && !quem.endsWith('@g.us')) db.definirNomeContato(quem, m.pushName, 'perfil');
+  } catch (_) {}
+}
+
 async function processarMensagem(m, tempoReal) {
   if (!m || !m.key) return;
   // Visualização única: o WhatsApp não entrega o conteúdo pra aparelhos conectados
@@ -399,17 +411,26 @@ async function processarStatus(m, tempoReal) {
   if (tempoReal) emitir({ tipo: 'status_novo', autor });
 }
 
+let historicoCompleto = false;
 async function iniciar() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
+  // Histórico completo: o celular só manda TUDO (anos de conversas e contatos) na hora de
+  // conectar, e só pra quem se apresenta como WhatsApp Desktop. Conexões antigas continuam
+  // como estavam; quem conectar de novo pelo código já entra no modo completo.
+  const flagDesktop = path.join(AUTH_DIR, 'historico-completo.flag');
+  if (!state.creds.registered) { try { fs.mkdirSync(AUTH_DIR, { recursive: true }); fs.writeFileSync(flagDesktop, '1'); } catch (_) {} }
+  const desktop = fs.existsSync(flagDesktop);
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     markOnlineOnConnect: false, // não força seu próprio status online ao conectar
+    ...(desktop ? { browser: Browsers.macOS('Desktop'), syncFullHistory: true } : {}),
   });
+  historicoCompleto = desktop;
 
   socketAtual = sock;
 
@@ -429,6 +450,10 @@ async function iniciar() {
       emitir({ tipo: 'status', status: 'desconectado' });
       if (deveReconectar) {
         setTimeout(iniciar, 2000);
+      } else {
+        // desconectado pelo celular: apaga só o login (conversas ficam) e volta pra tela de conectar
+        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+        setTimeout(iniciar, 1500);
       }
     } else if (connection === 'open') {
       statusConexao = 'conectado';
@@ -474,7 +499,13 @@ async function iniciar() {
         const ts = Number(ch.conversationTimestamp || 0) * 1000;
         if (ts) db.atualizarUltimaMensagem(jid, null, ts);
       }
-      for (const m of messages || []) await processarMensagem(m, false);
+      // mensagens antigas (mais de 60 dias) não entram no banco — só aproveitamos o nome de quem mandou
+      const corte = Date.now() - 60 * 24 * 60 * 60 * 1000;
+      for (const m of messages || []) {
+        const ts = (Number(m.messageTimestamp) || 0) * 1000;
+        if (ts && ts < corte) { await colherNome(m); continue; }
+        await processarMensagem(m, false);
+      }
       emitir({ tipo: 'conversas' });
     } catch (err) {
       console.error('Erro no histórico:', err.message);
@@ -630,6 +661,20 @@ async function pedirCodigoPareamento(numero) {
   return limpo.length === 8 ? `${limpo.slice(0, 4)}-${limpo.slice(4)}` : limpo;
 }
 
+// Reconectar no modo histórico completo: sai deste aparelho conectado e volta pra tela do código.
+// As conversas e contatos guardados aqui continuam; só o login é refeito.
+async function reconectarCompleto() {
+  const sock = socketAtual;
+  if (sock && statusConexao === 'conectado') {
+    try { await sock.logout(); return { ok: true }; } catch (_) {}
+  }
+  try { sock && sock.end(undefined); } catch (_) {}
+  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+  statusConexao = 'desconectado';
+  setTimeout(iniciar, 1500);
+  return { ok: true };
+}
+
 // Pede ao WhatsApp pra avisar quando esse contato ficar online/digitando
 async function assinarPresenca(jid) {
   if (!socketAtual || statusConexao !== 'conectado') return;
@@ -677,7 +722,9 @@ async function recuperarContatos(modo) {
   }
   etapas.push(resolvidos + ' números achados');
   emitir({ tipo: 'conversas' });
-  return gerarVcf(modo, etapas);
+  if (modo === 'vcf' || modo === 'vcf-todos') return gerarVcf(modo === 'vcf-todos' ? 'todos' : 'agenda', etapas);
+  const lista = db.listarContatos();
+  return { total: lista.length, agenda: lista.filter((c) => c.agenda).length, etapas, historicoCompleto };
 }
 
 function gerarVcf(modo, etapas) {
@@ -1031,6 +1078,8 @@ async function enviarMensagem(jid, texto, citadaId) {
 
 module.exports = {
   recuperarContatos,
+  reconectarCompleto,
+  getHistoricoCompleto: () => historicoCompleto,
   gerarVcf,
   responderStatus,
   reagir,
