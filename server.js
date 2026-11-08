@@ -108,6 +108,7 @@ app.post('/api/conversas/:jid/midia', upload.single('arquivo'), async (req, res)
       tipoMensagem,
       nomeArquivo: req.file.originalname,
       legenda,
+      unica: req.body.unica === '1',
     });
 
     res.json({ ok: true });

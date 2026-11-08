@@ -281,6 +281,7 @@ function salvarMensagem(msg) {
       raw: msg.raw || null,
       duracao: msg.duracao || null,
       nome_arquivo: msg.nomeArquivo || null,
+      unica: msg.unica ? 1 : 0,
     })
     .write();
 }

@@ -95,6 +95,16 @@ def main():
     if 'Lbr/com/slimcreative/chatslim/Integracao;' not in s:
         s = s[:marcador.end()] + chamada + s[marcador.end():]
         open(main_smali, 'w', encoding='utf-8').write(s)
+    # voltar: fecha o que estiver aberto na página; sem nada aberto, fecha o app de vez
+    s = open(main_smali, encoding='utf-8').read()
+    m_voltar = re.search(r'\.method public onBackPressed\(\)V.*?\.end method', s, re.S)
+    if m_voltar and 'Integracao;->voltar' not in m_voltar.group(0):
+        novo = ('.method public onBackPressed()V\n    .locals 1\n\n'
+                '    iget-object v0, p0, Lcom/slimcreative/cambio/MainActivity;->web:Landroid/webkit/WebView;\n\n'
+                '    invoke-static {p0, v0}, Lbr/com/slimcreative/chatslim/Integracao;->voltar(Landroid/app/Activity;Landroid/webkit/WebView;)V\n\n'
+                '    return-void\n.end method')
+        s = s[:m_voltar.start()] + novo + s[m_voltar.end():]
+        open(main_smali, 'w', encoding='utf-8').write(s)
     print('✔ MainActivity do Radinho ligada ao Chat Slim')
 
     # 5) Manifest

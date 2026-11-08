@@ -149,7 +149,11 @@ async function garantirNomeDoGrupo(jid) {
  *   tempoReal = false → veio do histórico ao conectar (só registra, sem baixar mídia)
  */
 async function processarMensagem(m, tempoReal) {
-  if (!m || !m.message || !m.key) return;
+  if (!m || !m.key) return;
+  // Visualização única: o WhatsApp não entrega o conteúdo pra aparelhos conectados
+  // (igual o WhatsApp Web, que manda abrir no celular). Registramos o aviso dela.
+  if (!m.message && m.key.isViewOnce) return processarVisualizacaoUnica(m, tempoReal);
+  if (!m.message) return;
   if (m.key.remoteJid === 'status@broadcast' || m.broadcast) return processarStatus(m, tempoReal);
   if (ignorarConversa(m.key.remoteJid)) return;
 
@@ -209,6 +213,22 @@ async function processarMensagem(m, tempoReal) {
   }
 }
 
+async function processarVisualizacaoUnica(m, tempoReal) {
+  if (ignorarConversa(m.key.remoteJid)) return;
+  const conversaJid = await paraNumero(m.key.remoteJid, m.key.remoteJidAlt);
+  const ehGrupo = conversaJid.endsWith('@g.us');
+  const deMim = Boolean(m.key.fromMe);
+  const remetenteJid = ehGrupo ? await paraNumero(m.key.participant, m.key.participantAlt) : conversaJid;
+  const timestamp = (Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
+  db.upsertConversa({ jid: conversaJid, nome: !ehGrupo && !deMim ? m.pushName : null, ehGrupo, naoLida: tempoReal && !deMim });
+  db.salvarMensagem({ id: m.key.id, conversaJid, remetenteJid, remetenteNome: deMim ? null : m.pushName || null, deMim: deMim ? 1 : 0, tipo: 'unica', texto: '', midiaPath: null, midiaMimetype: null, timestamp });
+  db.atualizarUltimaMensagem(conversaJid, '🔒 Visualização única', timestamp);
+  if (tempoReal) {
+    emitir({ tipo: 'mensagem_nova', conversaJid, remetenteNome: m.pushName, deMim, texto: '', tipoMsg: 'unica' });
+    if (!deMim) notificarMensagem(conversaJid, ehGrupo, remetenteJid, m.pushName, 'unica', '');
+  }
+}
+
 // Miniatura (capa de vídeo/foto) e os dados pra baixar a mídia depois, se ainda não baixou
 function guardarExtrasDeMidia(m, conteudo, tipo, midiaPath) {
   const chave = CHAVE_DO_TIPO[tipo];
@@ -247,7 +267,7 @@ async function baixarMidiaAntiga(id) {
 }
 
 // ---- Notificações (o app mostra no topo da tela) ----
-const PREVIA = { imagem: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', documento: '📄 Documento', sticker: 'Figurinha' };
+const PREVIA = { imagem: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', documento: '📄 Documento', sticker: 'Figurinha', unica: '🔒 Visualização única' };
 let foco = { visivel: false, jid: null, em: 0 }; // o que a pessoa está vendo agora no app
 function appVisivel() {
   return foco.visivel && Date.now() - foco.em < 90 * 1000;
@@ -450,7 +470,7 @@ async function iniciar() {
   return sock;
 }
 
-async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeArquivo, legenda }) {
+async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeArquivo, legenda, unica }) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
   }
@@ -473,6 +493,8 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
     conteudo = { document: buffer, mimetype, fileName: nomeArquivo || 'arquivo' };
   }
 
+  // visualização única (foto, vídeo e áudio)
+  if (unica && ['imagem', 'video', 'audio'].includes(tipoMensagem)) conteudo.viewOnce = true;
   const resultado = await socketAtual.sendMessage(jid, conteudo);
   if (!resultado?.key?.id) {
     throw new Error('Mídia não foi confirmada pelo servidor do WhatsApp');
@@ -496,8 +518,9 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
     midiaPath: nomeLocal,
     midiaMimetype: mimetype,
     timestamp,
+    unica: !!(unica && ['imagem', 'video', 'audio'].includes(tipoMensagem)),
   });
-  db.atualizarUltimaMensagem(jid, legenda || `[${tipoMensagem}]`, timestamp);
+  db.atualizarUltimaMensagem(jid, unica ? '🔒 Visualização única' : legenda || `[${tipoMensagem}]`, timestamp);
   emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto: legenda, tipoMsg: tipoMensagem });
 
   return resultado;

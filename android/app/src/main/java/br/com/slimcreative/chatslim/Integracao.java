@@ -33,6 +33,22 @@ public final class Integracao {
     }
 
     /**
+     * Botão voltar do Radinho: se tiver algo aberto na página (conversa, foto, perfil...)
+     * a página fecha isso; senão o app fecha de vez e sai da lista de apps abertos
+     * (o rádio em stand-by e o Zap continuam recebendo por trás).
+     */
+    public static void voltar(Activity act, WebView web) {
+        try {
+            web.evaluateJavascript("(function(){try{return window.radinhoVoltar?radinhoVoltar():false}catch(e){return false}})()",
+                    v -> {
+                        if (!"true".equals(v)) act.finishAndRemoveTask();
+                    });
+        } catch (Throwable e) {
+            act.finishAndRemoveTask();
+        }
+    }
+
+    /**
      * Mantém o motor vivo "pendurado" no processo principal do app (que o serviço do
      * rádio já mantém vivo), sem precisar de uma segunda notificação fixa.
      */
