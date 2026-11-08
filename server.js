@@ -20,7 +20,7 @@ const UPLOAD_TEMP_DIR = path.join(BASE_DIR_GRAVAVEL, 'dados', 'upload_temp');
 if (!fs.existsSync(UPLOAD_TEMP_DIR)) fs.mkdirSync(UPLOAD_TEMP_DIR, { recursive: true });
 const upload = multer({ dest: UPLOAD_TEMP_DIR, limits: { fileSize: 64 * 1024 * 1024 } }); // até 64MB
 
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 
 // ---- Segurança do servidor local ----
 // Só a página do próprio app (e a do Radinho, que embute o Chat Slim) pode ler/usar a API.
@@ -164,6 +164,42 @@ app.post('/api/desconectar', async (req, res) => {
 app.post('/api/reconectar-completo', async (req, res) => {
   try { res.json(await motor.reconectarCompleto()); }
   catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ---- Backup da interface (cores, papel de parede, blocos, fixadas, ajustes) ----
+const BACKUP_DIR = path.join(db.MIDIA_DIR, '..', 'backups');
+const nomeBackupOk = (n) => /^interface-[0-9_-]+\.json$/.test(n);
+app.post('/api/interface/backup', (req, res) => {
+  try {
+    const dados = (req.body || {}).dados;
+    if (!dados || typeof dados !== 'object') return res.status(400).json({ erro: 'backup vazio' });
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const d = new Date(), z = (n) => String(n).padStart(2, '0');
+    const nome = `interface-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.json`;
+    const conteudo = JSON.stringify({ tipo: 'radinho-interface', versao: (req.body || {}).versao || 0, criado: Date.now(), auto: !!(req.body || {}).auto, dados });
+    fs.writeFileSync(path.join(BACKUP_DIR, nome), conteudo);
+    // guarda os 20 mais novos
+    fs.readdirSync(BACKUP_DIR).filter(nomeBackupOk).sort().reverse().slice(20).forEach((n) => { try { fs.unlinkSync(path.join(BACKUP_DIR, n)); } catch (_) {} });
+    // cópia pra salvar em Downloads (só quando foi você que pediu)
+    if (!(req.body || {}).auto) fs.writeFileSync(path.join(db.MIDIA_DIR, nome), conteudo);
+    res.json({ ok: true, nome, tamanho: conteudo.length });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.get('/api/interface/backups', (req, res) => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return res.json([]);
+    res.json(fs.readdirSync(BACKUP_DIR).filter(nomeBackupOk).sort().reverse().map((n) => {
+      const st = fs.statSync(path.join(BACKUP_DIR, n));
+      let auto = false, versao = 0;
+      try { const j = JSON.parse(fs.readFileSync(path.join(BACKUP_DIR, n), 'utf8')); auto = !!j.auto; versao = j.versao || 0; } catch (_) {}
+      return { nome: n, ts: st.mtimeMs, tamanho: st.size, auto, versao };
+    }));
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.get('/api/interface/backups/:nome', (req, res) => {
+  const n = String(req.params.nome || '');
+  if (!nomeBackupOk(n) || !fs.existsSync(path.join(BACKUP_DIR, n))) return res.status(404).json({ erro: 'backup não encontrado' });
+  res.type('application/json').send(fs.readFileSync(path.join(BACKUP_DIR, n), 'utf8'));
 });
 
 // Pedir a agenda completa ao WhatsApp

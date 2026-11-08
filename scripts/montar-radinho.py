@@ -75,6 +75,8 @@ def main():
 
     # 3) app.html do Radinho (versão com a aba WhatsApp)
     shutil.copy2(a.app_html, os.path.join(rad, 'assets', 'app.html'))
+    # carregador com suporte a versão fixada (downgrade)
+    shutil.copy2(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'radinho', 'index.html'), os.path.join(rad, 'assets', 'index.html'))
     ver = re.search(r'const APP_VERSAO\s*=\s*(\d+)', open(a.app_html, encoding='utf-8').read())
     print(f'✔ app.html embutido (versão {ver.group(1) if ver else "?"})')
 

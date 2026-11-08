@@ -22,6 +22,19 @@ if (fonte.includes(errado)) {
   console.log('ℹ correção do jimp não necessária nesta versão do Baileys');
 }
 
+// Status que já estavam postados quando você conecta: o WhatsApp manda num pacote
+// próprio (INITIAL_STATUS_V3) que o Baileys ignora. Faz ele entregar como mensagens.
+const arqHist = path.join(raiz, 'node_modules/@whiskeysockets/baileys/lib/Utils/history.js');
+let hist = fs.readFileSync(arqHist, 'utf8');
+const marcaHist = 'case proto.HistorySync.HistorySyncType.PUSH_NAME:';
+if (!hist.includes('INITIAL_STATUS_V3') && hist.includes(marcaHist)) {
+  hist = hist.replace(marcaHist, 'case proto.HistorySync.HistorySyncType.INITIAL_STATUS_V3:\n            for (const sm of item.statusV3Messages || []) messages.push(sm);\n            break;\n        ' + marcaHist);
+  fs.writeFileSync(arqHist, hist);
+  console.log('✔ status antigos (INITIAL_STATUS_V3) liberados no Baileys');
+} else {
+  console.log('ℹ correção dos status antigos não necessária');
+}
+
 fs.rmSync(saida, { recursive: true, force: true });
 fs.mkdirSync(saida, { recursive: true });
 

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Radinho</title><style>html,body{margin:0;height:100%;background:#0b0d0c}</style></head>
+<body><script>
+/* Carregador do Radinho: usa a versão mais nova entre a que veio no APK e a baixada online.
+   Se uma versão anterior foi FIXADA (downgrade), usa ela até você voltar pra mais nova. */
+setTimeout(async function(){
+  function ver(c){ var m = String(c||'').match(/const APP_VERSAO\s*=\s*(\d+)/); return m ? parseInt(m[1]) : 0; }
+  var code = null, boot = 0, fixo = null;
+  try{
+    fixo = localStorage.getItem('radinho_fixo_code');
+    var fb = parseInt(localStorage.getItem('radinho_fixo_boot')) || 0;
+    if (fixo && fb >= 3){ localStorage.removeItem('radinho_fixo_code'); fixo = null; }   // fixada falhou 3x: solta
+    if (fixo) localStorage.setItem('radinho_fixo_boot', String(fb + 1));
+  }catch(e){}
+  if (fixo){
+    var vf = ver(fixo);
+    // a versão antiga não procura atualização (senão ela se trocaria sozinha)
+    code = fixo.replace(/const APP_VERSAO\s*=\s*\d+/, 'const APP_VERSAO = 999999');
+    var etiqueta = '<script>(function(){setTimeout(function(){try{localStorage.setItem("radinho_fixo_boot","0")}catch(e){}},6000);' +
+      'var b=document.createElement("button");b.textContent="v' + vf + ' fixada · voltar pra mais nova";' +
+      'b.style.cssText="position:fixed;left:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:99999;border:0;border-radius:999px;padding:6px 11px;font:600 11px system-ui,sans-serif;background:rgba(255,193,7,.92);color:#111;box-shadow:0 2px 8px rgba(0,0,0,.4)";' +
+      'b.onclick=function(){if(confirm("Voltar pra versão mais nova do Radinho?")){try{localStorage.removeItem("radinho_fixo_code");localStorage.removeItem("radinho_fixo_boot")}catch(e){}location.reload()}};' +
+      'document.body.appendChild(b)})();<\/script>';
+    code = code.indexOf('</body>') >= 0 ? code.replace('</body>', etiqueta + '</body>') : code + etiqueta;
+  } else {
+    try{
+      boot = parseInt(localStorage.getItem('radinho_boot')) || 0;
+      var salva = localStorage.getItem('radinho_code');
+      if (salva && boot >= 3){            // a versão baixada falhou 3x seguidas: volta pra original
+        localStorage.removeItem('radinho_code'); localStorage.removeItem('radinho_ver'); salva = null;
+      }
+      if (salva) localStorage.setItem('radinho_boot', String(boot + 1));
+      code = salva;
+    }catch(e){}
+    var embutida = await (await fetch('app.html', {cache:'no-store'})).text();
+    if (!code || ver(code) <= ver(embutida)) code = embutida;
+  }
+  document.open(); document.write(code); document.close();
+}, 0);
+</script></body></html>

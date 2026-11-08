@@ -517,8 +517,15 @@ async function iniciar() {
   });
 
   // ---- Histórico que o WhatsApp manda ao conectar (conversas, contatos, mensagens recentes) ----
-  sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
+  sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, lidPnMappings }) => {
     try {
+      // pares @lid -> número que o próprio histórico traz (mais contatos com número)
+      try {
+        const pares = (lidPnMappings || []).map((x) => [normalizar(x.lid), normalizar(x.pn)])
+          .filter(([l, p]) => l.endsWith('@lid') && p.endsWith('@s.whatsapp.net') && mapaLid.get(l) !== p);
+        pares.forEach(([l, p]) => mapaLid.set(l, p));
+        if (pares.length) db.unificarLidsEmLote(pares);
+      } catch (_) {}
       salvarContatosLista(contacts);
       for (const ch of chats || []) {
         if (ignorarConversa(ch.id)) continue;
