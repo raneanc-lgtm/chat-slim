@@ -8,6 +8,20 @@ const esbuild = require('esbuild');
 const raiz = path.join(__dirname, '..');
 const saida = path.join(raiz, 'android/app/src/main/assets/nodejs-project');
 
+// Modo celular: o código de pareamento só aceita tipo "navegador". Então o pedido do código
+// se apresenta como Chrome, e o registro do aparelho continua dizendo que é celular Android.
+{
+  const arqSock = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys', 'lib', 'Socket', 'socket.js');
+  let f = fs.readFileSync(arqSock, 'utf8');
+  const a1 = 'content: getCompanionPlatformId(browser)';
+  const a2 = 'content: `${browser[1]} (${browser[0]})`';
+  if (f.includes(a1) && f.includes(a2)) {
+    f = f.split(a1).join("content: getCompanionPlatformId(/android/i.test(browser[1]) ? ['Mac OS', 'Chrome'] : browser)");
+    f = f.split(a2).join("content: /android/i.test(browser[1]) ? 'Chrome (Mac OS)' : `${browser[1]} (${browser[0]})`");
+    fs.writeFileSync(arqSock, f);
+    console.log('✔ pareamento por código no modo celular ajustado');
+  }
+}
 // Correção pontual no Baileys: ele testa `typeof Jimp === 'object'`, mas no jimp 1.x
 // Jimp é uma classe (function). Sem isso não gera miniatura de imagem/vídeo no Android
 // (lá não existe o "sharp", que é binário nativo de PC).
