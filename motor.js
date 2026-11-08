@@ -350,6 +350,8 @@ async function iniciar() {
     // modo celular: conecta como celular Android adicional (igual GB/OG em modo aparelho
     // conectado), que é o tipo de aparelho pra quem o WhatsApp entrega a visualização única
     browser: db.obterConfig().modo_celular ? Browsers.android('Chat Slim') : Browsers.macOS('Chrome'),
+    // no modo celular o QR é escaneado de outra tela: cada QR dura 90s (normal é 20s)
+    qrTimeout: db.obterConfig().modo_celular ? 90000 : undefined,
     markOnlineOnConnect: false, // não força seu próprio status online ao conectar
   });
 
