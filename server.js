@@ -151,6 +151,12 @@ app.get('/api/contatos', (req, res) => {
   res.json(db.listarContatos());
 });
 
+// Recuperar o máximo de contatos e gerar o arquivo .vcf (modo: 'agenda' ou 'todos')
+app.post('/api/contatos/recuperar', async (req, res) => {
+  try { res.json(await motor.recuperarContatos((req.body || {}).modo)); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // Pedir a agenda completa ao WhatsApp
 app.post('/api/sincronizar-contatos', async (req, res) => {
   try {

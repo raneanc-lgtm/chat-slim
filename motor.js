@@ -638,6 +638,69 @@ async function assinarPresenca(jid) {
   } catch (_) {}
 }
 
+// ---- Recuperar o máximo de contatos e gerar um arquivo de agenda (.vcf) ----
+// Junta tudo que o WhatsApp entrega: agenda inteira guardada no servidor (snapshot),
+// participantes de todos os grupos (pra achar o número de quem vem só com @lid),
+// contatos das conversas e do histórico. Depois gera o .vcf pra importar no celular.
+async function recuperarContatos(modo) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  const etapas = [];
+  // 1) agenda completa do servidor
+  try {
+    await socketAtual.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null, critical_block: null } });
+    await socketAtual.resyncAppState(['critical_block', 'critical_unblock_low'], true);
+    etapas.push('agenda do WhatsApp baixada');
+  } catch (e) { etapas.push('agenda: ' + e.message); }
+  // 2) participantes de todos os grupos
+  let grupos = 0;
+  try {
+    const todos = await socketAtual.groupFetchAllParticipating();
+    for (const g of Object.values(todos || {})) {
+      grupos++;
+      for (const p of g.participants || []) {
+        const id = p.id || '';
+        const pn = p.phoneNumber || (id.endsWith('@s.whatsapp.net') ? id : null);
+        const lid = p.lid || (id.endsWith('@lid') ? id : null);
+        if (lid && pn) lembrarLid(lid, pn);
+        if (p.notify) db.definirNomeContato(normalizar(pn || id), p.notify, 'perfil');
+      }
+    }
+    etapas.push(grupos + ' grupos conferidos');
+  } catch (e) { etapas.push('grupos: ' + e.message); }
+  // 3) códigos internos (@lid) -> número de telefone
+  let resolvidos = 0;
+  for (const lid of db.lidsSemNumero()) {
+    try {
+      const pn = await socketAtual.signalRepository?.lidMapping?.getPNForLID(lid);
+      if (pn) { lembrarLid(lid, pn); resolvidos++; }
+    } catch (_) {}
+  }
+  etapas.push(resolvidos + ' números achados');
+  emitir({ tipo: 'conversas' });
+  return gerarVcf(modo, etapas);
+}
+
+function gerarVcf(modo, etapas) {
+  const so = modo === 'todos' ? null : 'agenda';
+  const lista = db.listarContatos().filter((c) => c.jid.endsWith('@s.whatsapp.net') && (!so || c.agenda));
+  const vistos = new Set();
+  const esc = (t) => String(t).replace(/[;\\]/g, ' ').replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+  const linhas = [];
+  for (const c of lista) {
+    const num = c.jid.split('@')[0].split(':')[0].replace(/\D/g, '');
+    if (!num || num.length < 8 || vistos.has(num)) continue;
+    vistos.add(num);
+    const nome = (c.nome || '').trim() || '+' + num;
+    linhas.push('BEGIN:VCARD', 'VERSION:3.0', 'FN:' + esc(nome), 'N:;' + esc(nome) + ';;;', 'TEL;TYPE=CELL:+' + num, 'END:VCARD');
+  }
+  const d = new Date();
+  const arquivo = 'Contatos_Zap_' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + '_' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + '.vcf';
+  fs.writeFileSync(path.join(db.MIDIA_DIR, arquivo), linhas.join('\r\n') + '\r\n', 'utf8');
+  const agenda = db.listarContatos().filter((c) => c.agenda && c.jid.endsWith('@s.whatsapp.net')).length;
+  console.log(`Contatos recuperados: ${vistos.size} no arquivo (${modo || 'agenda'}) • ${(etapas || []).join(' • ')}`);
+  return { arquivo, total: vistos.size, agenda, conhecidos: db.listarContatos().length, etapas: etapas || [] };
+}
+
 // ---- Agenda completa (pede ao WhatsApp a sincronização dos contatos) ----
 async function sincronizarContatos() {
   if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
@@ -967,6 +1030,8 @@ async function enviarMensagem(jid, texto, citadaId) {
 }
 
 module.exports = {
+  recuperarContatos,
+  gerarVcf,
   responderStatus,
   reagir,
   encaminhar,
