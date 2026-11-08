@@ -291,7 +291,7 @@ app.get('/api/status', async (req, res) => {
   if (qr) {
     qrImagem = await qrcode.toDataURL(qr);
   }
-  res.json({ status, qrImagem });
+  res.json({ status, qrImagem, motivo: motor.getMotivo(), modo: motor.getModo() });
 });
 
 // Server-Sent Events — atualizações em tempo real pro front

@@ -32,7 +32,9 @@ const AUTH_DIR = path.join(BASE_DIR, 'auth_info');
 
 let socketAtual = null;
 let primeiroInicio = true;
-let falhasSeguidas = 0; // quedas seguidas sem chegar no QR nem conectar
+let falhasSeguidas = 0;
+let ultimoMotivo = null; // última recusa do WhatsApp (mostrada na tela)
+let quedasConectando = 0; // quedas seguidas: aumenta a espera pra não insistir (o WhatsApp bloqueia quem insiste) // quedas seguidas sem chegar no QR nem conectar
 let ultimoQR = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
 let envios = 0; // envios em andamento (a atualização espera zerar pra reiniciar)
@@ -383,6 +385,8 @@ async function iniciar() {
 
     if (qr) {
       falhasSeguidas = 0;
+      quedasConectando = 0;
+      ultimoMotivo = null;
       ultimoQR = qr;
       statusConexao = 'aguardando_qr';
       emitir({ tipo: 'qr', qr });
@@ -390,6 +394,9 @@ async function iniciar() {
 
     if (connection === 'close') {
       const motivo = lastDisconnect?.error?.output?.statusCode;
+      ultimoMotivo = { codigo: motivo || 0, texto: (lastDisconnect?.error?.message || '').slice(0, 120), em: Date.now() };
+      quedasConectando++;
+      const espera = Math.min(60000, 2000 * Math.pow(2, Math.max(0, quedasConectando - 2))); // 2s,2s,4s,8s... até 60s
       const deveReconectar = motivo !== DisconnectReason.loggedOut;
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
@@ -406,7 +413,8 @@ async function iniciar() {
         return;
       }
       if (deveReconectar) {
-        setTimeout(iniciar, 2000);
+        console.log('[conexão] tentando de novo em', Math.round(espera / 1000), 's');
+        setTimeout(iniciar, espera);
       } else {
         // desconectado pelo celular: limpa a sessão e volta pra tela de conectar
         try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
@@ -414,6 +422,8 @@ async function iniciar() {
       }
     } else if (connection === 'open') {
       falhasSeguidas = 0;
+      quedasConectando = 0;
+      ultimoMotivo = null;
       statusConexao = 'conectado';
       try {
         const eu = sock.user || {};
@@ -945,5 +955,7 @@ module.exports = {
   enviosEmAndamento: () => envios,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
+  getMotivo: () => ultimoMotivo,
+  getModo: () => (db.obterConfig().modo_celular ? 'celular' : 'computador'),
   getQR: () => ultimoQR,
 };
