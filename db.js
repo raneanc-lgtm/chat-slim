@@ -238,6 +238,10 @@ function salvarStatus(st) {
   db.get('status').push(st).write();
 }
 
+function obterStatus(id) {
+  return db.get('status').find({ id: String(id) }).value() || null;
+}
+
 function listarStatus() {
   const limite = Date.now() - 24 * 60 * 60 * 1000;
   const velhos = db.get('status').filter((x) => x.timestamp < limite).value();
@@ -429,6 +433,7 @@ module.exports = {
   estaVigiado,
   definirVigiado,
   salvarStatus,
+  obterStatus,
   listarStatus,
   salvarMensagem,
   marcarComoApagada,

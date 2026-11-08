@@ -231,6 +231,10 @@ app.post('/api/midia/:id/baixar', async (req, res) => {
 });
 
 // ---- Postar status ----
+app.post('/api/status/:id/responder', async (req, res) => {
+  try { res.json(await motor.responderStatus(req.params.id, (req.body || {}).texto)); }
+  catch (e) { res.status(400).json({ erro: e.message }); }
+});
 app.post('/api/status/texto', async (req, res) => {
   try { res.json(await motor.postarStatusTexto(req.body || {})); }
   catch (err) { res.status(500).json({ erro: err.message }); }

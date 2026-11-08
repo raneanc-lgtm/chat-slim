@@ -388,6 +388,7 @@ async function processarStatus(m, tempoReal) {
   db.salvarStatus({
     id: m.key.id,
     autor_jid: autor,
+    participante: m.key.participant || null,
     tipo,
     texto: extrairTexto(conteudo),
     midia_path: midia.path,
@@ -895,6 +896,35 @@ async function apagarConversa(jid) {
   return { noWhatsApp, erro };
 }
 
+// Responder / reagir ao status de alguém: vai pro privado da pessoa citando o status
+// (é assim que o WhatsApp faz: a resposta e as reações rápidas aparecem no chat "respondendo ao status")
+async function responderStatus(statusId, texto) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado no momento');
+  const st = db.obterStatus(statusId);
+  if (!st || st.autor_jid === 'eu') throw new Error('Status não encontrado');
+  texto = String(texto || '').trim();
+  if (!texto) throw new Error('Mensagem vazia');
+  const jid = st.autor_jid;
+  const rot = { imagem: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio' }[st.tipo];
+  const resumo = st.texto || rot || 'Status';
+  const quotedMsg = st.tipo === 'imagem' ? { imageMessage: { caption: st.texto || '' } }
+    : st.tipo === 'video' ? { videoMessage: { caption: st.texto || '' } }
+    : { extendedTextMessage: { text: st.texto || '' } };
+  const quoted = { key: { remoteJid: 'status@broadcast', id: st.id, fromMe: false, participant: st.participante || jid }, message: quotedMsg };
+  db.upsertConversa({ jid, nome: null, ehGrupo: false });
+  const resultado = await socketAtual.sendMessage(jid, { text: texto }, { quoted });
+  if (!resultado?.key?.id) throw new Error('Mensagem não foi confirmada pelo servidor do WhatsApp');
+  const timestamp = Date.now();
+  db.salvarMensagem({
+    id: resultado.key.id, conversaJid: jid, remetenteJid: jid, remetenteNome: null, deMim: 1, tipo: 'texto', texto,
+    midiaPath: null, midiaMimetype: null, timestamp, status: 2,
+    citadaId: null, citadaTexto: ('Status · ' + resumo).slice(0, 200), citadaAutor: jid,
+  });
+  db.atualizarUltimaMensagem(jid, texto, timestamp, { id: resultado.key.id, deMim: true, status: 2 });
+  emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto, tipoMsg: 'texto' });
+  return { ok: true };
+}
+
 async function enviarMensagem(jid, texto, citadaId) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
@@ -937,6 +967,7 @@ async function enviarMensagem(jid, texto, citadaId) {
 }
 
 module.exports = {
+  responderStatus,
   reagir,
   encaminhar,
   iniciar,
