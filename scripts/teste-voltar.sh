@@ -6,6 +6,7 @@ R=resultado; mkdir -p $R
 adb install -g teste/Radinho-original.apk >/dev/null && echo "original instalado"
 adb install -r -g teste/Radinho-master.apk >/dev/null && echo "master instalado por cima"
 adb shell am start -W -n $PKG/.MainActivity | grep -E "TotalTime"; sleep 40
+adb shell input keyevent KEYCODE_BACK; sleep 3  # fecha o aviso de bateria do sistema
 adb exec-out screencap -p > $R/1-aberto.png
 echo "--- antes: processos"; adb shell pidof $PKG; adb shell pidof $PKG:motor
 echo "--- recentes antes"; adb shell dumpsys activity recents | grep -c "$PKG"
