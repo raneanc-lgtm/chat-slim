@@ -61,6 +61,19 @@ const saida = path.join(raiz, 'android/app/src/main/assets/nodejs-project');
     console.log('✔ companion_reg_refresh tratado (QR troca a chave quando o WhatsApp pede)');
   } else console.log('ℹ companion_reg_refresh: trecho não encontrado');
 }
+// Modo celular: registra o aparelho como ANDROID_PHONE (browser[1] = 'ANDROID_PHONE'), mas o login
+// continua se identificando como WhatsApp Web — login "Android" com versão do Web leva 401.
+{
+  const arqVal = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys', 'lib', 'Utils', 'validate-connection.js');
+  let v = fs.readFileSync(arqVal, 'utf8');
+  const cond = "config.browser[1].toLocaleLowerCase().includes('android')";
+  const n = v.split(cond).length - 1;
+  if (n === 2) {
+    v = v.split(cond).join("config.browser[1].toLocaleLowerCase() === 'android'");
+    fs.writeFileSync(arqVal, v);
+    console.log('✔ modo celular: login como Web, registro como Android');
+  } else console.log('ℹ modo celular: trecho do login não encontrado (' + n + ')');
+}
 // Correção pontual no Baileys: ele testa `typeof Jimp === 'object'`, mas no jimp 1.x
 // Jimp é uma classe (function). Sem isso não gera miniatura de imagem/vídeo no Android
 // (lá não existe o "sharp", que é binário nativo de PC).
