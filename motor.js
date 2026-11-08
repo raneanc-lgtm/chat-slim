@@ -17,6 +17,7 @@ const {
   jidNormalizedUser,
   BufferJSON,
   generateWAMessageFromContent,
+  Browsers,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
@@ -160,6 +161,9 @@ async function processarMensagem(m, tempoReal) {
   const conteudo = normalizeMessageContent(m.message) || m.message;
   if (conteudo.protocolMessage || conteudo.reactionMessage || conteudo.pollUpdateMessage) return;
   const tipo = detectarTipo(conteudo);
+  const embrulho = m.message || {};
+  const ehUnica = !!(embrulho.viewOnceMessage || embrulho.viewOnceMessageV2 || embrulho.viewOnceMessageV2Extension ||
+    (conteudo[CHAVE_DO_TIPO[tipo]] || {}).viewOnce);
   if (tipo === 'outro') return;
 
   const conversaJid = await paraNumero(m.key.remoteJid, m.key.remoteJidAlt);
@@ -195,6 +199,7 @@ async function processarMensagem(m, tempoReal) {
     midiaMimetype: mimetype,
     timestamp,
     ...extra,
+    unica: ehUnica,
   });
 
   db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp);
@@ -340,6 +345,9 @@ async function iniciar() {
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
+    // modo celular: conecta como celular Android adicional (igual GB/OG em modo aparelho
+    // conectado), que é o tipo de aparelho pra quem o WhatsApp entrega a visualização única
+    browser: db.obterConfig().modo_celular ? Browsers.android('Chat Slim') : Browsers.macOS('Chrome'),
     markOnlineOnConnect: false, // não força seu próprio status online ao conectar
   });
 
@@ -359,7 +367,12 @@ async function iniciar() {
       const deveReconectar = motivo !== DisconnectReason.loggedOut;
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
+      if (socketAtual !== sock) return; // trocando de modo: quem reinicia é a troca
       if (deveReconectar) {
+        setTimeout(iniciar, 2000);
+      } else {
+        // desconectado pelo celular: limpa a sessão e volta pra tela de conectar
+        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
         setTimeout(iniciar, 2000);
       }
     } else if (connection === 'open') {
@@ -844,7 +857,26 @@ async function enviarMensagem(jid, texto) {
   return resultado;
 }
 
+// Troca entre "computador" (igual WhatsApp Web) e "celular adicional" (recebe visualização única).
+// Precisa conectar de novo: desconecta, apaga a sessão e mostra a tela de conectar.
+async function trocarModoAparelho(celular) {
+  db.definirConfig({ modo_celular: !!celular });
+  const antigo = socketAtual;
+  socketAtual = null;
+  if (antigo) {
+    try { await antigo.logout(); } catch (_) {}
+    try { antigo.end(undefined); } catch (_) {}
+  }
+  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+  statusConexao = 'desconectado';
+  ultimoQR = null;
+  emitir({ tipo: 'status', status: 'desconectado' });
+  setTimeout(iniciar, 1500);
+  return { ok: true, modo_celular: !!celular };
+}
+
 module.exports = {
+  trocarModoAparelho,
   iniciar,
   onEvento,
   enviarMensagem,

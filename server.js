@@ -191,6 +191,11 @@ app.post('/api/config', (req, res) => {
   res.json(cfg);
 });
 
+app.post('/api/modo-aparelho', async (req, res) => {
+  try { res.json(await motor.trocarModoAparelho(!!(req.body && req.body.celular))); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // ---- Perfil ----
 app.get('/api/perfil/:jid', async (req, res) => {
   try { res.json(await motor.perfil(decodeURIComponent(req.params.jid))); }
