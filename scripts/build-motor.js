@@ -22,6 +22,45 @@ const saida = path.join(raiz, 'android/app/src/main/assets/nodejs-project');
     console.log('✔ pareamento por código no modo celular ajustado');
   }
 }
+// Pareamento por QR travando (bugs abertos no Baileys: issues #2737 / PRs #2749 e #2765):
+// 1) antes de parear não existe creds.me, e a confirmação (ack) dos avisos quebrava com TypeError;
+// 2) o WhatsApp manda <notification type="companion_reg_refresh"> pedindo pra trocar a chave
+//    (adv secret) do QR; o Baileys ignorava, e o celular escaneava um QR com chave já aposentada.
+{
+  const lib = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys', 'lib', 'Socket');
+  const arqRecv = path.join(lib, 'messages-recv.js');
+  let r = fs.readFileSync(arqRecv, 'utf8');
+  const ackVelho = 'const stanza = buildAckStanza(node, errorCode, authState.creds.me.id);';
+  if (r.includes(ackVelho)) {
+    r = r.split(ackVelho).join("if (node.tag === 'message' && !authState.creds.me?.id) throw new Error('ack de mensagem antes do pareamento'); const stanza = buildAckStanza(node, errorCode, authState.creds.me?.id);");
+    fs.writeFileSync(arqRecv, r);
+    console.log('✔ ack antes do pareamento corrigido');
+  } else console.log('ℹ ack antes do pareamento: trecho não encontrado (talvez já corrigido)');
+
+  const arqSock = path.join(lib, 'socket.js');
+  let k = fs.readFileSync(arqSock, 'utf8');
+  const qrVelho = 'const qr = buildPairingQRData(ref, noiseKeyB64, identityKeyB64, advB64, browser);';
+  const fimHandler = '        genPairQR();\n    });\n';
+  if (k.includes(qrVelho) && k.split(fimHandler).length === 2) {
+    k = k.split(qrVelho).join('qrRefAtual = ref; const qr = buildPairingQRData(ref, noiseKeyB64, identityKeyB64, creds.advSecretKey, browser);');
+    k = k.split('    let qrTimer;\n').join('    let qrTimer;\n    let qrRefAtual = null;\n');
+    k = k.split(fimHandler).join(fimHandler + `    ws.on('CB:notification,type:companion_reg_refresh', (node) => {
+        if (!getBinaryNodeChild(node, 'companion_reg_refresh') && !getBinaryNodeChild(node, 'pair-device-rotate-qr')) return;
+        if (creds.me) return;
+        creds.advSecretKey = randomBytes(32).toString('base64');
+        ev.emit('creds.update', { advSecretKey: creds.advSecretKey });
+        logger.info('companion_reg_refresh: chave do QR trocada');
+        if (qrRefAtual && ws.isOpen) {
+            const qr = buildPairingQRData(qrRefAtual, Buffer.from(creds.noiseKey.public).toString('base64'), Buffer.from(creds.signedIdentityKey.public).toString('base64'), creds.advSecretKey, browser);
+            ev.emit('connection.update', { qr });
+        }
+    });
+`);
+    if (!k.includes('let qrRefAtual = null;')) throw new Error('correção do QR: let qrTimer não encontrado');
+    fs.writeFileSync(arqSock, k);
+    console.log('✔ companion_reg_refresh tratado (QR troca a chave quando o WhatsApp pede)');
+  } else console.log('ℹ companion_reg_refresh: trecho não encontrado');
+}
 // Correção pontual no Baileys: ele testa `typeof Jimp === 'object'`, mas no jimp 1.x
 // Jimp é uma classe (function). Sem isso não gera miniatura de imagem/vídeo no Android
 // (lá não existe o "sharp", que é binário nativo de PC).
