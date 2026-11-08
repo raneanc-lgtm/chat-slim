@@ -451,17 +451,20 @@ async function iniciar() {
   });
 
   // ---- Presença (online/offline/digitando) ----
+  const timersDigitando = new Map();
   sock.ev.on('presence.update', async ({ id, presences }) => {
     for (const [jidBruto, info] of Object.entries(presences)) {
       const participanteJid = await paraNumero(jidBruto);
-      const status = info.lastKnownPresence; // available, unavailable, composing, recording
+      const bruto = info.lastKnownPresence; // available, unavailable, composing, recording, paused
       const mapa = {
         available: 'online',
         unavailable: 'offline',
         composing: 'digitando',
         recording: 'gravando',
+        paused: 'online', // parou de digitar: volta pra online, não fica "digitando" pra sempre
       };
-      const statusTraduzido = mapa[status] || status;
+      const statusTraduzido = mapa[bruto] || bruto;
+      clearTimeout(timersDigitando.get(participanteJid));
       const antes = (db.obterPresenca(participanteJid) || {}).status;
       if (statusTraduzido === 'online' && antes !== 'online' && antes !== 'digitando' && antes !== 'gravando') avisarOnline(participanteJid);
       // visto por último: vem junto quando a pessoa sai (se a privacidade dela deixar)
@@ -469,6 +472,16 @@ async function iniciar() {
       if (!vistoEm && statusTraduzido === 'offline' && (antes === 'online' || antes === 'digitando' || antes === 'gravando')) vistoEm = Date.now();
       db.atualizarPresenca(participanteJid, statusTraduzido, vistoEm);
       emitir({ tipo: 'presenca', jid: participanteJid, status: statusTraduzido, visto_em: vistoEm || (db.obterPresenca(participanteJid) || {}).visto_em || null });
+      // digitando/gravando expira sozinho se a pessoa parar e o WhatsApp não avisar a parada
+      if (statusTraduzido === 'digitando' || statusTraduzido === 'gravando') {
+        timersDigitando.set(participanteJid, setTimeout(() => {
+          timersDigitando.delete(participanteJid);
+          if (['digitando', 'gravando'].includes((db.obterPresenca(participanteJid) || {}).status)) {
+            db.atualizarPresenca(participanteJid, 'online', null);
+            emitir({ tipo: 'presenca', jid: participanteJid, status: 'online', visto_em: (db.obterPresenca(participanteJid) || {}).visto_em || null });
+          }
+        }, 12000));
+      }
     }
   });
 
