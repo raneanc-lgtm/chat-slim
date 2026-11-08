@@ -294,6 +294,7 @@ function salvarMensagem(msg) {
       duracao: msg.duracao || null,
       nome_arquivo: msg.nomeArquivo || null,
       unica: msg.unica ? 1 : 0,
+      status: msg.status != null ? msg.status : (msg.deMim ? 2 : 0),
     })
     .write();
 }

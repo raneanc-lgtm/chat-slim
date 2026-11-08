@@ -537,8 +537,9 @@ async function enviarMidia(jid, { caminhoArquivo, mimetype, tipoMensagem, nomeAr
     midiaMimetype: mimetype,
     timestamp,
     unica: !!(unica && ['imagem', 'video', 'audio'].includes(tipoMensagem)),
+    status: 2,
   });
-  db.atualizarUltimaMensagem(jid, unica ? '🔒 Visualização única' : legenda || `[${tipoMensagem}]`, timestamp);
+  db.atualizarUltimaMensagem(jid, unica ? '🔒 Visualização única' : legenda || `[${tipoMensagem}]`, timestamp, { id: resultado.key.id, deMim: true, status: 2 });
   emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto: legenda, tipoMsg: tipoMensagem });
 
   return resultado;
@@ -851,8 +852,9 @@ async function enviarMensagem(jid, texto) {
     midiaPath: null,
     midiaMimetype: null,
     timestamp,
+    status: 2,
   });
-  db.atualizarUltimaMensagem(jid, texto, timestamp);
+  db.atualizarUltimaMensagem(jid, texto, timestamp, { id: resultado.key.id, deMim: true, status: 2 });
   emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto, tipoMsg: 'texto' });
 
   return resultado;
