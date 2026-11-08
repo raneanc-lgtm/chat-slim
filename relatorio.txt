@@ -1,0 +1,20 @@
+original instalado
+master instalado por cima
+TotalTime: 3572
+--- antes: processos
+3571
+3998
+--- recentes antes
+10
+--- recentes depois (0 = saiu)
+0
+      topResumedActivity=ActivityRecord{cfbe17a u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t7}
+--- 60s depois: processos
+3571
+5890
+--- motor responde?
+[2026-11-08T01:08:47.720Z] INFO TextDecoder substituto ativado (Node sem ICU)
+[2026-11-08T01:08:50.253Z] INFO 
+🚀 Chat Slim rodando! Abra no navegador: http://127.0.0.1:3010
+
+[2026-11-08T01:08:50.258Z] INFO Motor versão 25 (atualização online)
