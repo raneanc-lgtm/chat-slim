@@ -31,6 +31,7 @@ const BASE_DIR = process.env.NODEJS_MOBILE_APP_STORAGE || __dirname;
 const AUTH_DIR = path.join(BASE_DIR, 'auth_info');
 
 let socketAtual = null;
+let falhasSeguidas = 0; // quedas seguidas sem chegar no QR nem conectar
 let ultimoQR = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
 let envios = 0; // envios em andamento (a atualização espera zerar pra reiniciar)
@@ -366,6 +367,7 @@ async function iniciar() {
     }
 
     if (qr) {
+      falhasSeguidas = 0;
       ultimoQR = qr;
       statusConexao = 'aguardando_qr';
       emitir({ tipo: 'qr', qr });
@@ -377,6 +379,17 @@ async function iniciar() {
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
       if (socketAtual !== sock) return; // trocando de modo: quem reinicia é a troca
+      // modo celular caindo sem nunca chegar no QR/conexão: volta sozinho pro modo computador
+      falhasSeguidas++;
+      if (db.obterConfig().modo_celular && falhasSeguidas >= 4) {
+        console.log('[conexão] modo celular falhou', falhasSeguidas, 'vezes seguidas: voltando pro modo computador');
+        falhasSeguidas = 0;
+        db.definirConfig({ modo_celular: false });
+        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+        emitir({ tipo: 'notificar', canal: 'mensagens', jid: '', titulo: 'Zap', texto: 'O modo celular não conectou. Voltei pro modo computador.' });
+        setTimeout(iniciar, 2000);
+        return;
+      }
       if (deveReconectar) {
         setTimeout(iniciar, 2000);
       } else {
@@ -385,6 +398,7 @@ async function iniciar() {
         setTimeout(iniciar, 2000);
       }
     } else if (connection === 'open') {
+      falhasSeguidas = 0;
       statusConexao = 'conectado';
       try {
         const eu = sock.user || {};
