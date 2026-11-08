@@ -29,7 +29,7 @@ if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 const adapter = new FileSync(path.join(DATA_DIR, 'chatslim.json'));
 const db = low(adapter);
 
-db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [], vigiados: [] }).write();
+db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [], vigiados: [], status_silenciados: [], config: {} }).write();
 
 // Limpeza de dados antigos: versões anteriores guardavam status e canais como se fossem conversa
 (function limparLixo() {
@@ -237,14 +237,17 @@ function listarStatus() {
   for (const x of db.get('status').orderBy(['timestamp'], ['asc']).value()) {
     (porAutor[x.autor_jid] = porAutor[x.autor_jid] || []).push(x);
   }
+  const silenciados = new Set(db.get('status_silenciados').value());
   return Object.entries(porAutor)
     .map(([jid, itens]) => ({
       autor_jid: jid,
-      nome: nomeDoContato(jid) || formatarNumero(jid),
+      nome: jid === 'eu' ? 'Meu status' : nomeDoContato(jid) || formatarNumero(jid),
+      meu: jid === 'eu',
+      silenciado: silenciados.has(jid),
       itens,
       ultimo_ts: itens[itens.length - 1].timestamp,
     }))
-    .sort((a, b) => b.ultimo_ts - a.ultimo_ts);
+    .sort((a, b) => (b.meu - a.meu) || (b.ultimo_ts - a.ultimo_ts));
 }
 
 function listarConversas() {
@@ -274,8 +277,28 @@ function salvarMensagem(msg) {
       timestamp: msg.timestamp,
       apagada_pelo_remetente: 0,
       apagada_em: null,
+      midia_thumb: msg.midiaThumb || null,
+      raw: msg.raw || null,
+      duracao: msg.duracao || null,
+      nome_arquivo: msg.nomeArquivo || null,
     })
     .write();
+}
+
+function obterMensagem(id) {
+  return db.get('mensagens').find({ id }).value();
+}
+
+function definirMidia(id, midiaPath, mimetype) {
+  db.get('mensagens').find({ id }).assign({ midia_path: midiaPath, midia_mimetype: mimetype, raw: null }).write();
+}
+
+function midiasDaConversa(jid, limite = 30) {
+  return db.get('mensagens')
+    .filter((m) => m.conversa_jid === jid && (m.tipo === 'imagem' || m.tipo === 'video') && (m.midia_path || m.midia_thumb))
+    .orderBy(['timestamp'], ['desc']).take(limite)
+    .map((m) => ({ id: m.id, tipo: m.tipo, midia_path: m.midia_path, midia_thumb: m.midia_thumb }))
+    .value();
 }
 
 function marcarComoApagada(id) {
@@ -285,23 +308,61 @@ function marcarComoApagada(id) {
     .write();
 }
 
-function listarMensagens(conversaJid, limite = 200) {
+function listarMensagens(conversaJid, limite = 300) {
   return db
     .get('mensagens')
     .filter({ conversa_jid: conversaJid })
     .orderBy(['timestamp'], ['asc'])
     .takeRight(limite)
+    .map((m) => { const { raw, ...resto } = m; return { ...resto, pode_baixar: !!raw }; })
     .value();
 }
 
 // ---- Presença ----
-function atualizarPresenca(jid, status) {
+function atualizarPresenca(jid, status, vistoEm) {
   const existente = db.get('presenca').find({ jid }).value();
+  const dados = { status, atualizado_em: Date.now() };
+  if (vistoEm) dados.visto_em = vistoEm;
   if (existente) {
-    db.get('presenca').find({ jid }).assign({ status, atualizado_em: Date.now() }).write();
+    db.get('presenca').find({ jid }).assign(dados).write();
   } else {
-    db.get('presenca').push({ jid, status, atualizado_em: Date.now() }).write();
+    db.get('presenca').push({ jid, ...dados }).write();
   }
+}
+
+// ---- Conversa: dados, silenciar, recentes ----
+function obterConversa(jid) {
+  return db.get('conversas').find({ jid }).value();
+}
+function definirSilenciada(jid, ligar) {
+  if (!obterConversa(jid)) upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') });
+  db.get('conversas').find({ jid }).assign({ silenciada: !!ligar }).write();
+}
+function conversasRecentes(n) {
+  return db.get('conversas').filter((c) => !c.eh_grupo && c.ultima_mensagem_ts > 0)
+    .orderBy(['ultima_mensagem_ts'], ['desc']).take(n).map('jid').value();
+}
+function nomesDe(jid) {
+  const c = db.get('contatos').find({ jid }).value() || {};
+  return { agenda: c.nome_agenda || null, perfil: c.nome_perfil || c.nome || null, grupo: c.nome_grupo || null };
+}
+
+// ---- Status silenciados ----
+function statusSilenciado(jid) {
+  return db.get('status_silenciados').includes(jid).value();
+}
+function definirStatusSilenciado(jid, ligar) {
+  if (ligar && !statusSilenciado(jid)) db.get('status_silenciados').push(jid).write();
+  if (!ligar) db.get('status_silenciados').pull(jid).write();
+}
+
+// ---- Configurações do Zap ----
+function obterConfig() {
+  return db.get('config').value() || {};
+}
+function definirConfig(mudancas) {
+  db.set('config', { ...obterConfig(), ...mudancas }).write();
+  return obterConfig();
 }
 
 function obterPresenca(jid) {
@@ -321,6 +382,18 @@ module.exports = {
   ultimaMensagem,
   apagarConversa,
   listarContatos,
+  obterMensagem,
+  definirMidia,
+  midiasDaConversa,
+  obterConversa,
+  definirSilenciada,
+  conversasRecentes,
+  nomesDe,
+  formatarNumero,
+  statusSilenciado,
+  definirStatusSilenciado,
+  obterConfig,
+  definirConfig,
   lidsSemNumero,
   contarContatosAgenda,
   nomeDe,

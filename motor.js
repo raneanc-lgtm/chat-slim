@@ -15,6 +15,8 @@ const {
   downloadMediaMessage,
   normalizeMessageContent,
   jidNormalizedUser,
+  BufferJSON,
+  generateWAMessageFromContent,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
@@ -167,6 +169,7 @@ async function processarMensagem(m, tempoReal) {
   const { path: midiaPath, mimetype } = tempoReal
     ? await salvarMidiaSeHouver(m, conteudo, tipo)
     : { path: null, mimetype: (conteudo[CHAVE_DO_TIPO[tipo]] || {}).mimetype || null };
+  const extra = guardarExtrasDeMidia(m, conteudo, tipo, midiaPath);
 
   db.upsertConversa({
     jid: conversaJid,
@@ -187,6 +190,7 @@ async function processarMensagem(m, tempoReal) {
     midiaPath,
     midiaMimetype: mimetype,
     timestamp,
+    ...extra,
   });
 
   db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp);
@@ -201,7 +205,61 @@ async function processarMensagem(m, tempoReal) {
       texto,
       tipoMsg: tipo,
     });
+    if (!deMim) notificarMensagem(conversaJid, ehGrupo, remetenteJid, m.pushName, tipo, texto);
   }
+}
+
+// Miniatura (capa de vídeo/foto) e os dados pra baixar a mídia depois, se ainda não baixou
+function guardarExtrasDeMidia(m, conteudo, tipo, midiaPath) {
+  const chave = CHAVE_DO_TIPO[tipo];
+  if (!chave) return {};
+  const info = conteudo[chave] || {};
+  const extra = {};
+  if (info.jpegThumbnail && (tipo === 'video' || tipo === 'imagem')) {
+    try {
+      const nome = 'thumb_' + String(m.key.id).replace(/[^A-Za-z0-9]/g, '') + '.jpg';
+      fs.writeFileSync(path.join(db.MIDIA_DIR, nome), Buffer.from(info.jpegThumbnail));
+      extra.midiaThumb = nome;
+    } catch (_) {}
+  }
+  if (!midiaPath) {
+    try {
+      extra.raw = JSON.stringify({ key: m.key, message: m.message }, BufferJSON.replacer);
+    } catch (_) {}
+  }
+  if (info.seconds) extra.duracao = info.seconds;
+  if (info.fileName) extra.nomeArquivo = info.fileName;
+  return extra;
+}
+
+// Baixa agora uma mídia que chegou antes (do histórico)
+async function baixarMidiaAntiga(id) {
+  const msg = db.obterMensagem(id);
+  if (!msg) throw new Error('mensagem não encontrada');
+  if (msg.midia_path) return msg.midia_path;
+  if (!msg.raw) throw new Error('essa mídia não pode mais ser baixada');
+  const m = JSON.parse(msg.raw, BufferJSON.reviver);
+  const conteudo = normalizeMessageContent(m.message) || m.message;
+  const r = await salvarMidiaSeHouver(m, conteudo, msg.tipo);
+  if (!r.path) throw new Error('o WhatsApp não liberou essa mídia (pode ter expirado)');
+  db.definirMidia(id, r.path, r.mimetype);
+  return r.path;
+}
+
+// ---- Notificações (o app mostra no topo da tela) ----
+const PREVIA = { imagem: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', documento: '📄 Documento', sticker: 'Figurinha' };
+let foco = { visivel: false, jid: null, em: 0 }; // o que a pessoa está vendo agora no app
+function appVisivel() {
+  return foco.visivel && Date.now() - foco.em < 90 * 1000;
+}
+function notificarMensagem(conversaJid, ehGrupo, remetenteJid, pushName, tipo, texto) {
+  const conv = db.obterConversa(conversaJid) || {};
+  if (conv.silenciada) return;
+  if (appVisivel()) return; // com o app aberto o próprio app avisa
+  let previa = PREVIA[tipo] ? PREVIA[tipo] + (texto ? ': ' + texto : '') : texto || '';
+  const nomeConv = db.nomeDe(conversaJid);
+  if (ehGrupo) previa = (pushName || db.nomeDe(remetenteJid)) + ': ' + previa;
+  emitir({ tipo: 'notificar', canal: 'mensagens', jid: conversaJid, titulo: nomeConv, texto: previa.slice(0, 300), naoLidas: conv.nao_lidas || 1 });
 }
 
 // Agenda (nome que VOCÊ salvou) vale mais que o nome que a pessoa pôs no perfil
@@ -381,8 +439,11 @@ async function iniciar() {
       const statusTraduzido = mapa[status] || status;
       const antes = (db.obterPresenca(participanteJid) || {}).status;
       if (statusTraduzido === 'online' && antes !== 'online' && antes !== 'digitando' && antes !== 'gravando') avisarOnline(participanteJid);
-      db.atualizarPresenca(participanteJid, statusTraduzido);
-      emitir({ tipo: 'presenca', jid: participanteJid, status: statusTraduzido });
+      // visto por último: vem junto quando a pessoa sai (se a privacidade dela deixar)
+      let vistoEm = info.lastSeen ? Number(info.lastSeen) * 1000 : null;
+      if (!vistoEm && statusTraduzido === 'offline' && (antes === 'online' || antes === 'digitando' || antes === 'gravando')) vistoEm = Date.now();
+      db.atualizarPresenca(participanteJid, statusTraduzido, vistoEm);
+      emitir({ tipo: 'presenca', jid: participanteJid, status: statusTraduzido, visto_em: vistoEm || (db.obterPresenca(participanteJid) || {}).visto_em || null });
     }
   });
 
@@ -538,22 +599,157 @@ function avisarOnline(jid) {
   const nome = db.nomeDe(jid);
   console.log('Online agora:', nome);
   emitir({ tipo: 'alerta_online', jid, nome });
+  emitir({ tipo: 'notificar', canal: 'online', jid, titulo: nome, texto: '🟢 está online agora' });
 }
 let vigiaTimer = null;
+// Online: aparece online enquanto você está usando o Zap (igual WhatsApp Web) ou
+// enquanto houver contato com aviso de online — a menos que "esconder meu online" esteja ligado.
+// (Regra do WhatsApp: escondendo o seu, você também não vê o online dos outros.)
 async function atualizarVigia() {
   clearTimeout(vigiaTimer);
   if (!socketAtual || statusConexao !== 'conectado') return;
   const lista = db.listarVigiados();
+  const cfg = db.obterConfig();
+  const disponivel = !cfg.esconder_online && (appVisivel() || lista.length > 0);
   try {
-    await socketAtual.sendPresenceUpdate(lista.length ? 'available' : 'unavailable');
-    for (const j of lista) await socketAtual.presenceSubscribe(j).catch(() => {});
+    await socketAtual.sendPresenceUpdate(disponivel ? 'available' : 'unavailable');
+    const alvos = new Set(lista);
+    if (appVisivel()) db.conversasRecentes(40).forEach((j) => alvos.add(j));
+    if (foco.jid && !foco.jid.endsWith('@g.us')) alvos.add(foco.jid);
+    for (const j of alvos) await socketAtual.presenceSubscribe(j).catch(() => {});
   } catch (_) {}
-  if (lista.length) vigiaTimer = setTimeout(atualizarVigia, 4 * 60 * 1000);
+  if (lista.length || appVisivel()) vigiaTimer = setTimeout(atualizarVigia, appVisivel() ? 2 * 60 * 1000 : 4 * 60 * 1000);
+}
+let focoTimer = null;
+function definirFoco(visivel, jid) {
+  const mudou = visivel !== foco.visivel || jid !== foco.jid;
+  foco = { visivel: !!visivel, jid: jid || null, em: Date.now() };
+  if (foco.jid && visivel) db.marcarLidas(foco.jid);
+  if (mudou) atualizarVigia();
+  clearTimeout(focoTimer);
+  if (visivel) focoTimer = setTimeout(() => atualizarVigia(), 95 * 1000); // se o app parar de avisar, volta a ficar escondido
+  return { ok: true };
 }
 function definirVigia(jid, ligar) {
   db.definirVigiado(jid, ligar);
   atualizarVigia();
   return { vigiados: db.listarVigiados() };
+}
+
+// ---- Perfil do contato / grupo ----
+async function perfil(jid) {
+  const ehGrupo = jid.endsWith('@g.us');
+  const conv = db.obterConversa(jid) || {};
+  const pres = db.obterPresenca(jid) || {};
+  const r = {
+    jid,
+    nome: db.nomeDe(jid),
+    nomes: db.nomesDe(jid),
+    numero: ehGrupo || jid.endsWith('@lid') ? null : db.formatarNumero(jid),
+    grupo: ehGrupo,
+    silenciada: !!conv.silenciada,
+    vigiado: db.estaVigiado(jid),
+    status_silenciado: db.statusSilenciado(jid),
+    presenca: { status: pres.status || null, visto_em: pres.visto_em || null },
+    foto: await fotoDePerfil(jid),
+    midias: db.midiasDaConversa(jid, 30),
+  };
+  if (socketAtual && statusConexao === 'conectado') {
+    if (ehGrupo) {
+      try {
+        const meta = await socketAtual.groupMetadata(jid);
+        r.assunto = meta.subject;
+        r.descricao = meta.desc || '';
+        r.participantes = [];
+        for (const p of meta.participants || []) {
+          const pj = await paraNumero(p.id, p.phoneNumber || p.jid);
+          r.participantes.push({ jid: pj, nome: db.nomeDe(pj), admin: p.admin || null });
+        }
+      } catch (_) {}
+    } else {
+      try {
+        const [st] = (await socketAtual.fetchStatus(jid)) || [];
+        const info = st && st.status;
+        if (info && typeof info === 'object') {
+          r.recado = info.status || '';
+          r.recado_em = info.setAt ? new Date(info.setAt).getTime() : null;
+        } else if (typeof info === 'string') r.recado = info;
+      } catch (_) {}
+      socketAtual.presenceSubscribe(jid).catch(() => {});
+    }
+  }
+  return r;
+}
+
+// Foto de perfil em alta qualidade (pra ver grande e salvar)
+async function fotoHD(jid) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  const url = await socketAtual.profilePictureUrl(jid, 'image', 15000).catch(() => null);
+  if (!url) throw new Error('essa pessoa não tem foto (ou esconde a foto de você)');
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('não consegui baixar a foto');
+  fs.mkdirSync(FOTOS_DIR, { recursive: true });
+  const nome = 'hd_' + jid.replace(/[^0-9a-zA-Z@._-]/g, '_') + '.jpg';
+  fs.writeFileSync(path.join(FOTOS_DIR, nome), Buffer.from(await r.arrayBuffer()));
+  return 'fotos/' + nome + '?v=' + Date.now();
+}
+
+function silenciarConversa(jid, ligar) {
+  db.definirSilenciada(jid, ligar);
+  emitir({ tipo: 'conversas' });
+  return { ok: true };
+}
+function silenciarStatus(jid, ligar) {
+  db.definirStatusSilenciado(jid, ligar);
+  return { ok: true };
+}
+
+// ---- Postar status ----
+function destinatariosDoStatus() {
+  const lista = db.listarContatos().map((c) => c.jid).filter((j) => j.endsWith('@s.whatsapp.net'));
+  const eu = socketAtual?.user?.id ? jidNormalizedUser(socketAtual.user.id) : null;
+  if (eu && !lista.includes(eu)) lista.push(eu);
+  if (lista.length < 2) throw new Error('sincronize os contatos antes de postar status (o WhatsApp precisa saber pra quem mostrar)');
+  return lista;
+}
+const corArgb = (hex) => (0xff000000 | parseInt(String(hex || '#000000').replace('#', '').slice(0, 6), 16)) >>> 0;
+
+async function postarStatusTexto({ texto, fundo, cor, fonte }) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  if (!texto || !String(texto).trim()) throw new Error('escreva alguma coisa');
+  const statusJidList = destinatariosDoStatus();
+  const msg = generateWAMessageFromContent('status@broadcast', {
+    extendedTextMessage: {
+      text: String(texto),
+      backgroundArgb: corArgb(fundo || '#1f6a45'),
+      textArgb: corArgb(cor || '#ffffff'),
+      font: Number(fonte) || 0,
+    },
+  }, { userJid: socketAtual.user.id });
+  await socketAtual.relayMessage('status@broadcast', msg.message, { messageId: msg.key.id, statusJidList });
+  db.salvarStatus({ id: msg.key.id, autor_jid: 'eu', tipo: 'texto', texto: String(texto), cor_fundo: fundo, cor_texto: cor, fonte: Number(fonte) || 0, midia_path: null, timestamp: Date.now() });
+  emitir({ tipo: 'status_novo', autor: 'eu' });
+  return { ok: true, destinatarios: statusJidList.length };
+}
+
+async function postarStatusMidia({ caminhoArquivo, mimetype, legenda }) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  const statusJidList = destinatariosDoStatus();
+  const buffer = fs.readFileSync(caminhoArquivo);
+  const ehVideo = String(mimetype).startsWith('video/');
+  const conteudo = ehVideo ? { video: buffer, mimetype, caption: legenda || undefined } : { image: buffer, mimetype, caption: legenda || undefined };
+  envios++;
+  try {
+    const r = await socketAtual.sendMessage('status@broadcast', conteudo, { statusJidList, broadcast: true });
+    const ext = (mimetype.split('/')[1] || 'bin').split(';')[0];
+    const nome = `${crypto.randomUUID()}.${ext}`;
+    fs.copyFileSync(caminhoArquivo, path.join(db.MIDIA_DIR, nome));
+    db.salvarStatus({ id: r.key.id, autor_jid: 'eu', tipo: ehVideo ? 'video' : 'imagem', texto: legenda || '', midia_path: nome, midia_mimetype: mimetype, timestamp: Date.now() });
+    emitir({ tipo: 'status_novo', autor: 'eu' });
+    return { ok: true, destinatarios: statusJidList.length };
+  } finally {
+    envios--;
+  }
 }
 
 // Confere se um número tem WhatsApp (pra iniciar conversa nova)
@@ -637,6 +833,15 @@ module.exports = {
   sincronizarContatos,
   fotoDePerfil,
   definirVigia,
+  definirFoco,
+  reaplicarOnline: () => atualizarVigia(),
+  perfil,
+  fotoHD,
+  silenciarConversa,
+  silenciarStatus,
+  postarStatusTexto,
+  postarStatusMidia,
+  baixarMidiaAntiga,
   enviosEmAndamento: () => envios,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,

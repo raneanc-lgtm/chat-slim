@@ -175,6 +175,62 @@ app.post('/api/atualizar', (req, res) => {
   res.json({ ok: true, motor: atualizador.versaoAtual() });
 });
 
+// ---- App aberto / conversa aberta (decide online, notificação e lidas) ----
+app.post('/api/foco', (req, res) => {
+  res.json(motor.definirFoco(!!(req.body && req.body.visivel), (req.body && req.body.jid) || null));
+});
+
+// ---- Configurações ----
+app.get('/api/config', (req, res) => res.json(db.obterConfig()));
+app.post('/api/config', (req, res) => {
+  const permitido = {};
+  if (req.body && 'esconder_online' in req.body) permitido.esconder_online = !!req.body.esconder_online;
+  const cfg = db.definirConfig(permitido);
+  motor.reaplicarOnline();
+  res.json(cfg);
+});
+
+// ---- Perfil ----
+app.get('/api/perfil/:jid', async (req, res) => {
+  try { res.json(await motor.perfil(decodeURIComponent(req.params.jid))); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.get('/api/foto-hd/:jid', async (req, res) => {
+  try { res.json({ foto: await motor.fotoHD(decodeURIComponent(req.params.jid)) }); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ---- Silenciar ----
+app.post('/api/conversas/:jid/silenciar', (req, res) => {
+  res.json(motor.silenciarConversa(decodeURIComponent(req.params.jid), !!(req.body && req.body.ligar)));
+});
+app.post('/api/status-silenciar/:jid', (req, res) => {
+  res.json(motor.silenciarStatus(decodeURIComponent(req.params.jid), !!(req.body && req.body.ligar)));
+});
+
+// ---- Baixar mídia antiga (que chegou antes de conectar) ----
+app.post('/api/midia/:id/baixar', async (req, res) => {
+  try { res.json({ midia: await motor.baixarMidiaAntiga(decodeURIComponent(req.params.id)) }); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ---- Postar status ----
+app.post('/api/status/texto', async (req, res) => {
+  try { res.json(await motor.postarStatusTexto(req.body || {})); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.post('/api/status/midia', upload.single('arquivo'), async (req, res) => {
+  const tmp = req.file?.path;
+  try {
+    if (!req.file) return res.status(400).json({ erro: 'Nenhum arquivo' });
+    res.json(await motor.postarStatusMidia({ caminhoArquivo: tmp, mimetype: req.file.mimetype, legenda: req.body.legenda || '' }));
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  } finally {
+    if (tmp && fs.existsSync(tmp)) fs.unlink(tmp, () => {});
+  }
+});
+
 // Versão do motor
 app.get('/api/versao', (req, res) => res.json({ motor: atualizador.versaoAtual() }));
 

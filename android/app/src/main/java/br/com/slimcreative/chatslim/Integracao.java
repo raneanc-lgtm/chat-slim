@@ -64,7 +64,23 @@ public final class Integracao {
 
         @JavascriptInterface
         public int versao() {
-            return 2;
+            return 3;
+        }
+
+        /** Conversa que a pessoa tocou na notificação (e limpa). */
+        @JavascriptInterface
+        public String conversaPendente() {
+            android.content.SharedPreferences p = act.getSharedPreferences("zap", Context.MODE_PRIVATE);
+            String jid = p.getString("abrir_jid", "");
+            long em = p.getLong("abrir_em", 0);
+            p.edit().remove("abrir_jid").apply();
+            return System.currentTimeMillis() - em < 5 * 60 * 1000 ? jid : "";
+        }
+
+        /** Salva uma mídia do Zap (caminho dentro de /midia) na galeria. Devolve "ok", "permissao" ou o erro. */
+        @JavascriptInterface
+        public String salvar(String caminho, String nome) {
+            return Galeria.salvar(act, Config.endereco(act) + "/midia/" + caminho, nome);
         }
 
         @JavascriptInterface

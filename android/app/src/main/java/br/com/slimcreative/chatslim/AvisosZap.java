@@ -44,13 +44,22 @@ public final class AvisosZap {
         }, "zap-avisos").start();
     }
 
+    private static final String CANAL_MSG = "zap_mensagens";
+
     private static void criarCanal(Context ctx) {
         if (Build.VERSION.SDK_INT < 26) return;
+        NotificationManager nm = ctx.getSystemService(NotificationManager.class);
         NotificationChannel c = new NotificationChannel(CANAL, "Zap: contato online", NotificationManager.IMPORTANCE_HIGH);
         c.setDescription("Aviso quando um contato marcado fica online");
         c.enableLights(true);
         c.setLightColor(Color.GREEN);
-        ctx.getSystemService(NotificationManager.class).createNotificationChannel(c);
+        nm.createNotificationChannel(c);
+        NotificationChannel m = new NotificationChannel(CANAL_MSG, "Zap: mensagens", NotificationManager.IMPORTANCE_HIGH);
+        m.setDescription("Mensagens novas do Zap");
+        m.enableLights(true);
+        m.setLightColor(Color.GREEN);
+        m.enableVibration(true);
+        nm.createNotificationChannel(m);
     }
 
     private static void ouvir(Context ctx) throws Exception {
@@ -64,31 +73,44 @@ public final class AvisosZap {
                 if (!linha.startsWith("data:")) continue;
                 JSONObject ev;
                 try { ev = new JSONObject(linha.substring(5).trim()); } catch (Exception e) { continue; }
-                if ("alerta_online".equals(ev.optString("tipo"))) {
-                    notificarOnline(ctx, ev.optString("jid"), ev.optString("nome", "Contato"));
-                }
+                // o motor decide QUANDO notificar (respeita silenciar, app aberto etc.);
+                // aqui só mostramos — assim dá pra mudar as regras sem APK novo
+                if ("notificar".equals(ev.optString("tipo"))) notificar(ctx, ev);
             }
         } finally {
             c.disconnect();
         }
     }
 
-    private static void notificarOnline(Context ctx, String jid, String nome) {
-        Intent abrir = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName());
-        PendingIntent pi = abrir == null ? null : PendingIntent.getActivity(ctx, 1, abrir,
+    private static void notificar(Context ctx, JSONObject ev) {
+        String canal = "online".equals(ev.optString("canal")) ? CANAL : CANAL_MSG;
+        String jid = ev.optString("jid", "");
+        String titulo = ev.optString("titulo", "Zap");
+        String texto = ev.optString("texto", "");
+
+        Intent abrir = new Intent(ctx, AbrirZap.class);
+        abrir.putExtra("jid", jid);
+        abrir.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent pi = PendingIntent.getActivity(ctx, jid.hashCode(), abrir,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(ctx, CANAL) : new Notification.Builder(ctx);
-        b.setSmallIcon(android.R.drawable.presence_online)
-         .setContentTitle(nome)
-         .setContentText("🟢 está online agora")
+
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(ctx, canal) : new Notification.Builder(ctx);
+        b.setSmallIcon(canal.equals(CANAL) ? android.R.drawable.presence_online : android.R.drawable.stat_notify_chat)
+         .setContentTitle(titulo)
+         .setContentText(texto)
+         .setStyle(new Notification.BigTextStyle().bigText(texto))
          .setColor(Color.rgb(61, 220, 132))
          .setAutoCancel(true)
-         .setCategory(Notification.CATEGORY_STATUS);
-        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(60 * 1000);
+         .setShowWhen(true)
+         .setContentIntent(pi)
+         .setCategory(canal.equals(CANAL) ? Notification.CATEGORY_STATUS : Notification.CATEGORY_MESSAGE);
+        int n = ev.optInt("naoLidas", 0);
+        if (n > 1) b.setNumber(n);
+        if (Build.VERSION.SDK_INT >= 26 && canal.equals(CANAL)) b.setTimeoutAfter(60 * 1000);
         if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL);
-        if (pi != null) b.setContentIntent(pi);
         try {
-            ctx.getSystemService(NotificationManager.class).notify(8000 + (jid.hashCode() & 0xfff), b.build());
+            int id = (canal.equals(CANAL) ? 8000 : 9000) + (jid.hashCode() & 0x7ff);
+            ctx.getSystemService(NotificationManager.class).notify(id, b.build());
         } catch (Exception e) {
             Log.w("ChatSlim", "Sem permissão de notificação: " + e.getMessage());
         }

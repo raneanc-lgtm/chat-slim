@@ -108,6 +108,8 @@ def main():
             android:windowSoftInputMode="adjustResize" android:theme="@android:style/Theme.Material.NoActionBar"/>
         <service android:name="br.com.slimcreative.chatslim.MotorService" android:exported="false"
             android:process=":motor"/>
+        <activity android:name="br.com.slimcreative.chatslim.AbrirZap" android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
         <receiver android:name="br.com.slimcreative.chatslim.BootMotor" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
@@ -118,6 +120,9 @@ def main():
         <meta-data android:name="chatslim.embutido" android:value="true"/>
     </application>'''
     m = m.replace('</application>', componentes, 1)
+    perm = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
+    if 'WRITE_EXTERNAL_STORAGE' not in m:
+        m = m.replace('<application ', perm + '\n    <application ', 1)
     if a.teste:
         m = m.replace('<application ', '<application android:debuggable="true" ', 1)
     open(mpath, 'w', encoding='utf-8').write(m)
