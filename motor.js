@@ -17,7 +17,6 @@ const {
   jidNormalizedUser,
   BufferJSON,
   generateWAMessageFromContent,
-  Browsers,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const path = require('path');
@@ -31,10 +30,6 @@ const BASE_DIR = process.env.NODEJS_MOBILE_APP_STORAGE || __dirname;
 const AUTH_DIR = path.join(BASE_DIR, 'auth_info');
 
 let socketAtual = null;
-let primeiroInicio = true;
-let falhasSeguidas = 0;
-let ultimoMotivo = null; // última recusa do WhatsApp (mostrada na tela)
-let quedasConectando = 0; // quedas seguidas: aumenta a espera pra não insistir (o WhatsApp bloqueia quem insiste) // quedas seguidas sem chegar no QR nem conectar
 let ultimoQR = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
 let envios = 0; // envios em andamento (a atualização espera zerar pra reiniciar)
@@ -165,9 +160,6 @@ async function processarMensagem(m, tempoReal) {
   const conteudo = normalizeMessageContent(m.message) || m.message;
   if (conteudo.protocolMessage || conteudo.reactionMessage || conteudo.pollUpdateMessage) return;
   const tipo = detectarTipo(conteudo);
-  const embrulho = m.message || {};
-  const ehUnica = !!(embrulho.viewOnceMessage || embrulho.viewOnceMessageV2 || embrulho.viewOnceMessageV2Extension ||
-    (conteudo[CHAVE_DO_TIPO[tipo]] || {}).viewOnce);
   if (tipo === 'outro') return;
 
   const conversaJid = await paraNumero(m.key.remoteJid, m.key.remoteJidAlt);
@@ -203,7 +195,6 @@ async function processarMensagem(m, tempoReal) {
     midiaMimetype: mimetype,
     timestamp,
     ...extra,
-    unica: ehUnica,
   });
 
   db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp);
@@ -341,35 +332,14 @@ async function processarStatus(m, tempoReal) {
 }
 
 async function iniciar() {
-  // Ao ligar o motor: se ficou no modo celular sem nunca ter conectado, volta pro modo computador
-  // (assim o app nunca abre preso em "Conectando..." por causa do modo experimental)
-  if (primeiroInicio) {
-    primeiroInicio = false;
-    try {
-      const credsArq = path.join(AUTH_DIR, 'creds.json');
-      const registrado = fs.existsSync(credsArq) && JSON.parse(fs.readFileSync(credsArq, 'utf8')).registered;
-      if (db.obterConfig().modo_celular && !registrado) {
-        console.log('[conexão] motor ligou no modo celular sem conexão: voltando pro modo computador');
-        db.definirConfig({ modo_celular: false });
-        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      }
-    } catch (e) { console.log('[conexão] checagem do modo:', e.message); }
-  }
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
     auth: state,
-    // enquanto não está conectado, guarda no motor.log o que o WhatsApp responde (pra achar erro de pareamento)
-    logger: state.creds.registered ? pino({ level: 'silent' })
-      : pino({ level: 'info' }, { write: (l) => { try { const o = JSON.parse(l); console.log('[wa]', o.msg || '', JSON.stringify(o).slice(0, 400)); } catch (_) { console.log('[wa]', String(l).slice(0, 400)); } } }),
+    logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    // modo celular: conecta como celular Android adicional (igual GB/OG em modo aparelho
-    // conectado), que é o tipo de aparelho pra quem o WhatsApp entrega a visualização única
-    browser: db.obterConfig().modo_celular ? ['Chat Slim', 'ANDROID_PHONE', ''] : Browsers.macOS('Chrome'),
-    // no modo celular o QR é escaneado de outra tela: cada QR dura 90s (normal é 20s)
-    qrTimeout: db.obterConfig().modo_celular ? 90000 : undefined,
     markOnlineOnConnect: false, // não força seu próprio status online ao conectar
   });
 
@@ -377,16 +347,8 @@ async function iniciar() {
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (connection || lastDisconnect) {
-      const e = lastDisconnect && lastDisconnect.error;
-      console.log('[conexão]', connection || '', e ? 'motivo=' + (e.output && e.output.statusCode) + ' ' + (e.message || '') : '',
-        update.isNewLogin ? 'novo login' : '', 'modo=' + (db.obterConfig().modo_celular ? 'celular' : 'computador'));
-    }
 
     if (qr) {
-      falhasSeguidas = 0;
-      quedasConectando = 0;
-      ultimoMotivo = null;
       ultimoQR = qr;
       statusConexao = 'aguardando_qr';
       emitir({ tipo: 'qr', qr });
@@ -394,36 +356,13 @@ async function iniciar() {
 
     if (connection === 'close') {
       const motivo = lastDisconnect?.error?.output?.statusCode;
-      ultimoMotivo = { codigo: motivo || 0, texto: (lastDisconnect?.error?.message || '').slice(0, 120), em: Date.now() };
-      quedasConectando++;
-      const espera = Math.min(60000, 2000 * Math.pow(2, Math.max(0, quedasConectando - 2))); // 2s,2s,4s,8s... até 60s
       const deveReconectar = motivo !== DisconnectReason.loggedOut;
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
-      if (socketAtual !== sock) return; // trocando de modo: quem reinicia é a troca
-      // modo celular caindo sem nunca chegar no QR/conexão: volta sozinho pro modo computador
-      falhasSeguidas++;
-      if (db.obterConfig().modo_celular && falhasSeguidas >= 4) {
-        console.log('[conexão] modo celular falhou', falhasSeguidas, 'vezes seguidas: voltando pro modo computador');
-        falhasSeguidas = 0;
-        db.definirConfig({ modo_celular: false });
-        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
-        emitir({ tipo: 'notificar', canal: 'mensagens', jid: '', titulo: 'Zap', texto: 'O modo celular não conectou. Voltei pro modo computador.' });
-        setTimeout(iniciar, 2000);
-        return;
-      }
       if (deveReconectar) {
-        console.log('[conexão] tentando de novo em', Math.round(espera / 1000), 's');
-        setTimeout(iniciar, espera);
-      } else {
-        // desconectado pelo celular: limpa a sessão e volta pra tela de conectar
-        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
         setTimeout(iniciar, 2000);
       }
     } else if (connection === 'open') {
-      falhasSeguidas = 0;
-      quedasConectando = 0;
-      ultimoMotivo = null;
       statusConexao = 'conectado';
       try {
         const eu = sock.user || {};
@@ -905,33 +844,7 @@ async function enviarMensagem(jid, texto) {
   return resultado;
 }
 
-// Troca entre "computador" (igual WhatsApp Web) e "celular adicional" (recebe visualização única).
-// Precisa conectar de novo: desconecta, apaga a sessão e mostra a tela de conectar.
-async function trocarModoAparelho(celular) {
-  console.log('[conexão] trocando para modo', celular ? 'celular' : 'computador');
-  db.definirConfig({ modo_celular: !!celular });
-  const antigo = socketAtual;
-  socketAtual = null;
-  statusConexao = 'desconectado';
-  ultimoQR = null;
-  emitir({ tipo: 'status', status: 'desconectado' });
-  if (antigo) {
-    // o socket velho não pode regravar a sessão depois que ela for apagada
-    try { antigo.ev.removeAllListeners('creds.update'); } catch (_) {}
-    try { await Promise.race([antigo.logout(), new Promise((r) => setTimeout(r, 5000))]); } catch (e) { console.log('[conexão] logout:', e.message); }
-    try { antigo.end(undefined); } catch (_) {}
-  }
-  await new Promise((r) => setTimeout(r, 1000));
-  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) { console.log('[conexão] apagar sessão:', e.message); }
-  setTimeout(() => {
-    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
-    iniciar().catch((e) => console.log('[conexão] iniciar:', e.message));
-  }, 1000);
-  return { ok: true, modo_celular: !!celular };
-}
-
 module.exports = {
-  trocarModoAparelho,
   iniciar,
   onEvento,
   enviarMensagem,
@@ -955,7 +868,5 @@ module.exports = {
   enviosEmAndamento: () => envios,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
-  getMotivo: () => ultimoMotivo,
-  getModo: () => (db.obterConfig().modo_celular ? 'celular' : 'computador'),
   getQR: () => ultimoQR,
 };
