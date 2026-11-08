@@ -412,6 +412,27 @@ async function processarStatus(m, tempoReal) {
 }
 
 let historicoCompleto = false;
+let geracao = 0, falhasDesktop = 0;
+const FLAG_WEB = path.join(BASE_DIR, 'modo-web.flag');
+
+// Começar do zero: sai da conta (se der), apaga só o login e sobe uma conexão nova
+// que mostra o código/QR. Conversas, contatos e fotos ficam.
+async function resetarConexao(sairDaConta) {
+  const velho = socketAtual;
+  geracao++;                         // a conexão velha para de mandar qualquer coisa
+  if (velho) {
+    if (sairDaConta) { try { await Promise.race([velho.logout(), new Promise((r) => setTimeout(r, 6000))]); } catch (_) {} }
+    try { velho.end(undefined); } catch (_) {}
+    try { velho.ev.removeAllListeners(); } catch (_) {}
+  }
+  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+  statusConexao = 'desconectado'; ultimoQR = null;
+  emitir({ tipo: 'status', status: 'desconectado' });
+  const g = geracao;
+  setTimeout(() => { if (g === geracao) iniciar().catch((e) => console.error('iniciar:', e.message)); }, 1200);
+  return { ok: true };
+}
+
 async function iniciar() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -419,9 +440,12 @@ async function iniciar() {
   // Histórico completo: o celular só manda TUDO (anos de conversas e contatos) na hora de
   // conectar, e só pra quem se apresenta como WhatsApp Desktop. Conexões antigas continuam
   // como estavam; quem conectar de novo pelo código já entra no modo completo.
+  const minha = ++geracao;              // cada conexão tem um número; as velhas ficam surdas
+  const ativo = () => minha === geracao;
   const flagDesktop = path.join(AUTH_DIR, 'historico-completo.flag');
-  if (!state.creds.registered) { try { fs.mkdirSync(AUTH_DIR, { recursive: true }); fs.writeFileSync(flagDesktop, '1'); } catch (_) {} }
+  if (!state.creds.registered && !fs.existsSync(FLAG_WEB)) { try { fs.mkdirSync(AUTH_DIR, { recursive: true }); fs.writeFileSync(flagDesktop, '1'); } catch (_) {} }
   const desktop = fs.existsSync(flagDesktop);
+  let teveQR = false;
   const sock = makeWASocket({
     version,
     auth: state,
@@ -435,9 +459,11 @@ async function iniciar() {
   socketAtual = sock;
 
   sock.ev.on('connection.update', (update) => {
+    if (!ativo()) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      teveQR = true; falhasDesktop = 0;
       ultimoQR = qr;
       statusConexao = 'aguardando_qr';
       emitir({ tipo: 'qr', qr });
@@ -445,16 +471,18 @@ async function iniciar() {
 
     if (connection === 'close') {
       const motivo = lastDisconnect?.error?.output?.statusCode;
-      const deveReconectar = motivo !== DisconnectReason.loggedOut;
+      console.log('[conexão] fechou, motivo=' + motivo + (desktop ? ' (modo completo)' : ''));
+      // modo completo recusado antes de mostrar o código/QR: volta pro modo normal (WhatsApp Web)
+      if (desktop && !state.creds.registered && !teveQR && (motivo === 405 || motivo === 403) && ++falhasDesktop >= 2) {
+        console.log('[conexão] modo completo recusado, voltando pro modo normal');
+        try { fs.writeFileSync(FLAG_WEB, '1'); } catch (_) {}
+        falhasDesktop = 0;
+        return resetarConexao(false);
+      }
+      if (motivo === DisconnectReason.loggedOut) return resetarConexao(false);
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
-      if (deveReconectar) {
-        setTimeout(iniciar, 2000);
-      } else {
-        // desconectado pelo celular: apaga só o login (conversas ficam) e volta pra tela de conectar
-        try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
-        setTimeout(iniciar, 1500);
-      }
+      setTimeout(() => { if (ativo()) iniciar(); }, 2000);
     } else if (connection === 'open') {
       statusConexao = 'conectado';
       try {
@@ -473,7 +501,7 @@ async function iniciar() {
     }
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', (...a) => { if (ativo()) return saveCreds(...a); });
 
   // ---- Mensagens novas (e as que chegaram enquanto estava desligado) ----
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -664,15 +692,8 @@ async function pedirCodigoPareamento(numero) {
 // Reconectar no modo histórico completo: sai deste aparelho conectado e volta pra tela do código.
 // As conversas e contatos guardados aqui continuam; só o login é refeito.
 async function reconectarCompleto() {
-  const sock = socketAtual;
-  if (sock && statusConexao === 'conectado') {
-    try { await sock.logout(); return { ok: true }; } catch (_) {}
-  }
-  try { sock && sock.end(undefined); } catch (_) {}
-  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
-  statusConexao = 'desconectado';
-  setTimeout(iniciar, 1500);
-  return { ok: true };
+  try { fs.rmSync(FLAG_WEB, { force: true }); } catch (_) {}
+  return resetarConexao(true);
 }
 
 // Pede ao WhatsApp pra avisar quando esse contato ficar online/digitando
@@ -1079,6 +1100,7 @@ async function enviarMensagem(jid, texto, citadaId) {
 module.exports = {
   recuperarContatos,
   reconectarCompleto,
+  resetarConexao,
   getHistoricoCompleto: () => historicoCompleto,
   gerarVcf,
   responderStatus,
