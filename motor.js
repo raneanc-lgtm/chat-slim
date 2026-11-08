@@ -709,44 +709,63 @@ async function assinarPresenca(jid) {
 // Junta tudo que o WhatsApp entrega: agenda inteira guardada no servidor (snapshot),
 // participantes de todos os grupos (pra achar o número de quem vem só com @lid),
 // contatos das conversas e do histórico. Depois gera o .vcf pra importar no celular.
+let puxando = null, ultimaAgendaCompleta = 0;
+const comLimite = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('demorou demais')), ms))]);
+const respirar = () => new Promise((r) => setImmediate(r));
+
 async function recuperarContatos(modo) {
   if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
-  const etapas = [];
-  // 1) agenda completa do servidor
-  try {
-    await socketAtual.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null, critical_block: null } });
-    await socketAtual.resyncAppState(['critical_block', 'critical_unblock_low'], true);
-    etapas.push('agenda do WhatsApp baixada');
-  } catch (e) { etapas.push('agenda: ' + e.message); }
-  // 2) participantes de todos os grupos
-  let grupos = 0;
-  try {
-    const todos = await socketAtual.groupFetchAllParticipating();
-    for (const g of Object.values(todos || {})) {
-      grupos++;
-      for (const p of g.participants || []) {
-        const id = p.id || '';
-        const pn = p.phoneNumber || (id.endsWith('@s.whatsapp.net') ? id : null);
-        const lid = p.lid || (id.endsWith('@lid') ? id : null);
-        if (lid && pn) lembrarLid(lid, pn);
-        if (p.notify) db.definirNomeContato(normalizar(pn || id), p.notify, 'perfil');
-      }
-    }
-    etapas.push(grupos + ' grupos conferidos');
-  } catch (e) { etapas.push('grupos: ' + e.message); }
-  // 3) códigos internos (@lid) -> número de telefone
-  let resolvidos = 0;
-  for (const lid of db.lidsSemNumero()) {
+  if (puxando) return puxando;                       // já está puxando: espera a mesma rodada
+  puxando = (async () => {
+    const sock = socketAtual, etapas = [];
+    // 1) agenda completa do servidor (no máximo a cada 5 min)
+    if (Date.now() - ultimaAgendaCompleta > 5 * 60 * 1000) {
+      try {
+        await sock.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null } });
+        await comLimite(sock.resyncAppState(['critical_unblock_low'], true), 60000);
+        ultimaAgendaCompleta = Date.now();
+        etapas.push('agenda do WhatsApp baixada');
+      } catch (e) { etapas.push('agenda: ' + e.message); }
+    } else etapas.push('agenda já baixada há pouco');
+    await respirar();
+    // 2) participantes de todos os grupos (grava tudo de uma vez)
     try {
-      const pn = await socketAtual.signalRepository?.lidMapping?.getPNForLID(lid);
-      if (pn) { lembrarLid(lid, pn); resolvidos++; }
-    } catch (_) {}
-  }
-  etapas.push(resolvidos + ' números achados');
-  emitir({ tipo: 'conversas' });
-  if (modo === 'vcf' || modo === 'vcf-todos') return gerarVcf(modo === 'vcf-todos' ? 'todos' : 'agenda', etapas);
-  const lista = db.listarContatos();
-  return { total: lista.length, agenda: lista.filter((c) => c.agenda).length, etapas, historicoCompleto };
+      const todos = await comLimite(sock.groupFetchAllParticipating(), 40000);
+      const pares = [];
+      let grupos = 0;
+      for (const g of Object.values(todos || {})) {
+        grupos++;
+        for (const p of g.participants || []) {
+          const id = normalizar(p.id || '');
+          const pn = normalizar(p.phoneNumber || (id.endsWith('@s.whatsapp.net') ? id : ''));
+          const lid = normalizar(p.lid || (id.endsWith('@lid') ? id : ''));
+          if (lid && pn && lid.endsWith('@lid') && pn.endsWith('@s.whatsapp.net') && mapaLid.get(lid) !== pn) { mapaLid.set(lid, pn); pares.push([lid, pn]); }
+        }
+      }
+      const n = db.unificarLidsEmLote(pares);
+      etapas.push(grupos + ' grupos conferidos (' + n + ' números novos)');
+    } catch (e) { etapas.push('grupos: ' + e.message); }
+    await respirar();
+    // 3) códigos internos (@lid) -> número (no máximo 25 s)
+    let resolvidos = 0;
+    const fim = Date.now() + 25000, achados = [];
+    for (const lid of db.lidsSemNumero()) {
+      if (Date.now() > fim) break;
+      try {
+        const pn = normalizar(await comLimite(Promise.resolve(sock.signalRepository?.lidMapping?.getPNForLID(lid)), 3000) || '');
+        if (pn && pn.endsWith('@s.whatsapp.net')) { mapaLid.set(lid, pn); achados.push([lid, pn]); resolvidos++; }
+      } catch (_) {}
+      if (resolvidos % 50 === 0) await respirar();
+    }
+    db.unificarLidsEmLote(achados);
+    etapas.push(resolvidos + ' números achados');
+    emitir({ tipo: 'conversas' });
+    if (modo === 'vcf' || modo === 'vcf-todos') return gerarVcf(modo === 'vcf-todos' ? 'todos' : 'agenda', etapas);
+    const lista = db.listarContatos();
+    console.log('[contatos] ' + lista.length + ' no Zap • ' + etapas.join(' • '));
+    return { total: lista.length, agenda: lista.filter((c) => c.agenda).length, etapas, historicoCompleto };
+  })();
+  try { return await puxando; } finally { puxando = null; }
 }
 
 function gerarVcf(modo, etapas) {
@@ -773,20 +792,25 @@ function gerarVcf(modo, etapas) {
 // ---- Agenda completa (pede ao WhatsApp a sincronização dos contatos) ----
 async function sincronizarContatos() {
   if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  if (puxando) { try { await puxando; } catch (_) {} }
   const antes = db.contarContatosAgenda();
   // A agenda fica na coleção "critical_unblock_low". O WhatsApp só manda ela INTEIRA
   // (snapshot) quando a versão local é zero; senão manda só o que mudou. Por isso
   // zeramos a versão antes — igual ao WhatsApp Web quando conecta pela 1ª vez.
   await socketAtual.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null } });
-  await socketAtual.resyncAppState(['critical_unblock_low'], true);
+  await comLimite(socketAtual.resyncAppState(['critical_unblock_low'], true), 60000);
   // contatos que vieram só com o código interno (@lid): tenta achar o número
   let resolvidos = 0;
+  const achados = [], fim = Date.now() + 25000;
   for (const lid of db.lidsSemNumero()) {
+    if (Date.now() > fim) break;
     try {
-      const pn = await socketAtual.signalRepository?.lidMapping?.getPNForLID(lid);
-      if (pn) { lembrarLid(lid, pn); resolvidos++; }
+      const pn = normalizar(await comLimite(Promise.resolve(socketAtual.signalRepository?.lidMapping?.getPNForLID(lid)), 3000) || '');
+      if (pn && pn.endsWith('@s.whatsapp.net')) { mapaLid.set(lid, pn); achados.push([lid, pn]); resolvidos++; }
     } catch (_) {}
   }
+  db.unificarLidsEmLote(achados);
+  ultimaAgendaCompleta = Date.now();
   const depois = db.contarContatosAgenda();
   const total = db.listarContatos().length;
   console.log(`Agenda sincronizada: ${antes} → ${depois} com nome da agenda, ${total} pra conversar (${resolvidos} números achados)`);
@@ -1100,6 +1124,7 @@ async function enviarMensagem(jid, texto, citadaId) {
 
 module.exports = {
   recuperarContatos,
+  _testeSocket: (sk) => { socketAtual = sk; statusConexao = 'conectado'; },
   reconectarCompleto,
   resetarConexao,
   getHistoricoCompleto: () => historicoCompleto,

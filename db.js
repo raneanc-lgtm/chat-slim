@@ -139,6 +139,23 @@ function listarLids() {
   return db.get('lids').value();
 }
 
+// Muitos pares @lid -> número de uma vez (grupos): grava UMA vez só e só mexe em
+// conversas/mensagens/status de quem realmente aparece lá.
+function unificarLidsEmLote(pares) {
+  const conhecidos = new Set(db.get('lids').map('lid').value());
+  const novos = pares.filter(([lid]) => !conhecidos.has(lid));
+  if (!novos.length) return 0;
+  const usados = new Set();
+  db.get('conversas').value().forEach((c) => usados.add(c.jid));
+  db.get('status').value().forEach((x) => usados.add(x.autor_jid));
+  db.get('mensagens').value().forEach((m) => { usados.add(m.conversa_jid); usados.add(m.remetente_jid); });
+  const lista = db.get('lids').value();
+  for (const [lid, pn] of novos) lista.push({ lid, pn });
+  db.write();
+  for (const [lid, pn] of novos) if (usados.has(lid)) unificarLid(lid, pn);
+  return novos.length;
+}
+
 function unificarLid(lid, pn) {
   if (!db.get('lids').find({ lid }).value()) db.get('lids').push({ lid, pn }).write();
   // mensagens
@@ -414,6 +431,7 @@ module.exports = {
   listarConversas,
   marcarLidas,
   definirNomeContato,
+  unificarLidsEmLote,
   limparNomeIgual,
   listarLids,
   unificarLid,
