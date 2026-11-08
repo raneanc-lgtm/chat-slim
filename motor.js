@@ -46,13 +46,44 @@ function onEvento(cb) {
 }
 
 function extrairTexto(mensagem) {
-  return (
+  const t = (
     mensagem.conversation ||
     mensagem.extendedTextMessage?.text ||
     mensagem.imageMessage?.caption ||
     mensagem.videoMessage?.caption ||
+    mensagem.documentMessage?.caption ||
     ''
   );
+  if (t) return t;
+  // resumo dos tipos especiais (aparece na lista de conversas e na busca)
+  const d = extrairDados(mensagem);
+  if (!d) return '';
+  if (d.tipo === 'localizacao') return '📍 ' + (d.nome || 'Localização');
+  if (d.tipo === 'contato') return '👤 ' + (d.contatos.map((c) => c.nome).join(', ') || 'Contato');
+  if (d.tipo === 'enquete') return '📊 ' + (d.pergunta || 'Enquete');
+  if (d.tipo === 'evento') return '📅 ' + (d.nome || 'Evento');
+  return '';
+}
+
+const numDoVcard = (v) => {
+  const s = String(v || '');
+  const w = s.match(/waid=(\d+)/i); if (w) return w[1];
+  const t = s.match(/TEL[^:]*:([+\d\s().-]+)/i); return t ? t[1].replace(/\D/g, '') : '';
+};
+const nomeDoVcard = (v) => { const m = String(v || '').match(/^FN[^:]*:(.*)$/im); return m ? m[1].trim() : ''; };
+// localização, contato, enquete e evento: guarda os dados pra desenhar a bolha
+function extrairDados(c) {
+  const loc = c.locationMessage || c.liveLocationMessage;
+  if (loc) return { tipo: 'localizacao', lat: Number(loc.degreesLatitude) || 0, lng: Number(loc.degreesLongitude) || 0, nome: loc.name || '', endereco: loc.address || '', aoVivo: !!c.liveLocationMessage };
+  if (c.contactMessage) return { tipo: 'contato', contatos: [{ nome: c.contactMessage.displayName || nomeDoVcard(c.contactMessage.vcard), numero: numDoVcard(c.contactMessage.vcard) }] };
+  if (c.contactsArrayMessage) return { tipo: 'contato', contatos: (c.contactsArrayMessage.contacts || []).map((x) => ({ nome: x.displayName || nomeDoVcard(x.vcard), numero: numDoVcard(x.vcard) })) };
+  const poll = c.pollCreationMessage || c.pollCreationMessageV2 || c.pollCreationMessageV3 || c.pollCreationMessageV5;
+  if (poll) return { tipo: 'enquete', pergunta: poll.name || '', opcoes: (poll.options || []).map((o) => o.optionName || ''), multipla: (Number(poll.selectableOptionsCount) || 0) !== 1 };
+  if (c.eventMessage) {
+    const e = c.eventMessage;
+    return { tipo: 'evento', nome: e.name || '', descricao: e.description || '', inicio: (Number(e.startTime) || 0) * 1000, fim: (Number(e.endTime) || 0) * 1000, local: e.location?.name || '', cancelado: !!e.isCanceled };
+  }
+  return null;
 }
 
 function detectarTipo(mensagem) {
@@ -62,6 +93,8 @@ function detectarTipo(mensagem) {
   if (mensagem.documentMessage) return 'documento';
   if (mensagem.stickerMessage) return 'sticker';
   if (mensagem.conversation || mensagem.extendedTextMessage) return 'texto';
+  const d = extrairDados(mensagem);
+  if (d) return d.tipo;
   return 'outro';
 }
 
@@ -272,6 +305,7 @@ async function processarMensagem(m, tempoReal) {
     midiaPath,
     midiaMimetype: mimetype,
     timestamp,
+    dados: extrairDados(conteudo),
     ...extra,
     ...citacao,
   });
@@ -1088,6 +1122,58 @@ async function responderStatus(statusId, texto) {
   return { ok: true };
 }
 
+// ---- Anexos especiais: localização, contato, enquete, evento, Pix ----
+async function enviarEspecial(jid, tipo, d) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado no momento');
+  d = d || {};
+  let conteudo, texto = '', dados = null, tipoMsg = tipo;
+  if (tipo === 'localizacao') {
+    const lat = Number(d.lat), lng = Number(d.lng);
+    if (!isFinite(lat) || !isFinite(lng)) throw new Error('Localização inválida');
+    conteudo = { location: { degreesLatitude: lat, degreesLongitude: lng, name: d.nome || undefined, address: d.endereco || undefined } };
+    dados = { tipo, lat, lng, nome: d.nome || '', endereco: d.endereco || '' };
+  } else if (tipo === 'contato') {
+    const lista = (d.contatos || []).filter((c) => c && c.numero).slice(0, 20);
+    if (!lista.length) throw new Error('Escolha pelo menos um contato');
+    const vc = (c) => {
+      const n = String(c.numero).replace(/\D/g, ''), nome = String(c.nome || ('+' + n)).replace(/[\r\n;]/g, ' ');
+      return 'BEGIN:VCARD\nVERSION:3.0\nFN:' + nome + '\nN:;' + nome + ';;;\nTEL;type=CELL;type=VOICE;waid=' + n + ':+' + n + '\nEND:VCARD';
+    };
+    const nomes = lista.map((c) => c.nome || ('+' + String(c.numero).replace(/\D/g, '')));
+    conteudo = { contacts: { displayName: lista.length === 1 ? nomes[0] : lista.length + ' contatos', contacts: lista.map((c) => ({ displayName: c.nome || undefined, vcard: vc(c) })) } };
+    dados = { tipo, contatos: lista.map((c, i) => ({ nome: nomes[i], numero: String(c.numero).replace(/\D/g, '') })) };
+  } else if (tipo === 'enquete') {
+    const opcoes = (d.opcoes || []).map((o) => String(o).trim()).filter(Boolean).slice(0, 12);
+    if (!String(d.pergunta || '').trim() || opcoes.length < 2) throw new Error('A enquete precisa de pergunta e pelo menos 2 opções');
+    conteudo = { poll: { name: String(d.pergunta).trim(), values: opcoes, selectableCount: d.multipla ? 0 : 1 } };
+    dados = { tipo, pergunta: String(d.pergunta).trim(), opcoes, multipla: !!d.multipla };
+  } else if (tipo === 'evento') {
+    const inicio = Number(d.inicio);
+    if (!String(d.nome || '').trim() || !inicio) throw new Error('O evento precisa de nome, data e hora');
+    conteudo = { event: { name: String(d.nome).trim(), description: d.descricao || undefined, startDate: new Date(inicio), endDate: d.fim ? new Date(Number(d.fim)) : undefined, location: d.local ? { name: d.local } : undefined, extraGuestsAllowed: false } };
+    dados = { tipo, nome: String(d.nome).trim(), descricao: d.descricao || '', inicio, fim: Number(d.fim) || 0, local: d.local || '' };
+  } else if (tipo === 'pix') {
+    // o "Pix" oficial do WhatsApp é pagamento dentro do app deles; aqui vai a chave numa mensagem fácil de copiar
+    const chave = String(d.chave || '').trim();
+    if (!chave) throw new Error('Informe a chave Pix');
+    texto = '💠 *Pix*\n' + (d.nome ? 'Nome: ' + d.nome + '\n' : '') + (d.tipoChave ? 'Tipo: ' + d.tipoChave + '\n' : '') + (d.valor ? 'Valor: R$ ' + d.valor + '\n' : '') + 'Chave:\n```' + chave + '```';
+    conteudo = { text: texto };
+    tipoMsg = 'texto';
+  } else throw new Error('Tipo de anexo desconhecido');
+  db.upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') });
+  envios++;
+  try {
+    const resultado = await socketAtual.sendMessage(jid, conteudo);
+    if (!resultado?.key?.id) throw new Error('Mensagem não foi confirmada pelo servidor do WhatsApp');
+    if (!texto) texto = extrairTexto(resultado.message || {}) || '';
+    const timestamp = Date.now();
+    db.salvarMensagem({ id: resultado.key.id, conversaJid: jid, remetenteJid: jid, remetenteNome: null, deMim: 1, tipo: tipoMsg, texto, midiaPath: null, midiaMimetype: null, timestamp, status: 2, dados });
+    db.atualizarUltimaMensagem(jid, texto, timestamp, { id: resultado.key.id, deMim: true, status: 2 });
+    emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto, tipoMsg });
+    return { ok: true, id: resultado.key.id };
+  } finally { envios--; }
+}
+
 async function enviarMensagem(jid, texto, citadaId) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
@@ -1131,6 +1217,7 @@ async function enviarMensagem(jid, texto, citadaId) {
 
 module.exports = {
   recuperarContatos,
+  enviarEspecial,
   _testeSocket: (sk) => { socketAtual = sk; statusConexao = 'conectado'; },
   reconectarCompleto,
   resetarConexao,

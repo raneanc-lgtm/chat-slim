@@ -11,6 +11,13 @@ import android.os.Looper;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
 
 /**
  * Usada quando o Chat Slim vai embutido em outro app (Radinho):
@@ -80,7 +87,7 @@ public final class Integracao {
 
         @JavascriptInterface
         public int versao() {
-            return 3;
+            return 4;
         }
 
         /** Conversa que a pessoa tocou na notificação (e limpa). */
@@ -102,6 +109,72 @@ public final class Integracao {
         @JavascriptInterface
         public int porta() {
             return Config.porta(act);
+        }
+
+        /** Abre um link fora do app (mapa, site, telefone...). */
+        @JavascriptInterface
+        public void abrirLink(String url) {
+            act.runOnUiThread(() -> {
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    act.startActivity(i);
+                } catch (Throwable ignored) {}
+            });
+        }
+
+        private static volatile Location melhor;
+        private static volatile long pediuEm;
+
+        /**
+         * Localização atual: "lat,lng,precisao,idadeSegundos", ou "permissao" (pediu a permissão agora),
+         * "desligado" (GPS desligado) ou "" (ainda procurando — chame de novo em meio segundo).
+         */
+        @JavascriptInterface
+        public String localizacao() {
+            try {
+                if (Build.VERSION.SDK_INT >= 23
+                        && act.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                        && act.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    act.runOnUiThread(() -> act.requestPermissions(new String[]{
+                            android.Manifest.permission.ACCESS_FINE_LOCATION,
+                            android.Manifest.permission.ACCESS_COARSE_LOCATION}, 7701));
+                    return "permissao";
+                }
+                final LocationManager lm = (LocationManager) act.getSystemService(Context.LOCATION_SERVICE);
+                if (lm == null) return "desligado";
+                java.util.List<String> provs = lm.getProviders(true);
+                if (provs == null || provs.isEmpty()) return "desligado";
+                for (String p : provs) {
+                    try {
+                        Location l = lm.getLastKnownLocation(p);
+                        if (l != null && (melhor == null || l.getTime() > melhor.getTime())) melhor = l;
+                    } catch (SecurityException ignored) {}
+                }
+                // pede uma leitura nova (no máximo a cada 20 s)
+                if (System.currentTimeMillis() - pediuEm > 20000) {
+                    pediuEm = System.currentTimeMillis();
+                    act.runOnUiThread(() -> {
+                        final LocationListener ouvinte = new LocationListener() {
+                            @Override public void onLocationChanged(Location l) { melhor = l; }
+                            @Override public void onStatusChanged(String p, int s, Bundle b) {}
+                            @Override public void onProviderEnabled(String p) {}
+                            @Override public void onProviderDisabled(String p) {}
+                        };
+                        for (String p : new String[]{LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER}) {
+                            try { if (lm.isProviderEnabled(p)) lm.requestLocationUpdates(p, 0, 0, ouvinte, Looper.getMainLooper()); }
+                            catch (Throwable ignored) {}
+                        }
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> { try { lm.removeUpdates(ouvinte); } catch (Throwable ignored) {} }, 30000);
+                    });
+                }
+                Location l = melhor;
+                if (l == null) return "";
+                long idade = (System.currentTimeMillis() - l.getTime()) / 1000;
+                return l.getLatitude() + "," + l.getLongitude() + "," + Math.round(l.getAccuracy()) + "," + idade;
+            } catch (Throwable e) {
+                return "";
+            }
         }
     }
 }

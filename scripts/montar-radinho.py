@@ -135,6 +135,10 @@ def main():
     perm = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
     if 'WRITE_EXTERNAL_STORAGE' not in m:
         m = m.replace('<application ', perm + '\n    <application ', 1)
+    # localização (anexo "Localização" do Zap)
+    for pp in ('ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION'):
+        if pp not in m:
+            m = m.replace('<application ', '<uses-permission android:name="android.permission.' + pp + '"/>\n    <application ', 1)
     if a.teste:
         m = m.replace('<application ', '<application android:debuggable="true" ', 1)
     open(mpath, 'w', encoding='utf-8').write(m)

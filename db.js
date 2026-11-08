@@ -325,6 +325,7 @@ function salvarMensagem(msg) {
       citada_id: msg.citadaId || null,
       citada_texto: msg.citadaTexto || null,
       citada_autor: msg.citadaAutor || null,
+      dados: msg.dados || null,
     })
     .write();
 }
