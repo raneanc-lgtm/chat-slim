@@ -343,7 +343,9 @@ async function iniciar() {
   const sock = makeWASocket({
     version,
     auth: state,
-    logger: pino({ level: 'silent' }),
+    // enquanto não está conectado, guarda no motor.log o que o WhatsApp responde (pra achar erro de pareamento)
+    logger: state.creds.registered ? pino({ level: 'silent' })
+      : pino({ level: 'info' }, { write: (l) => { try { const o = JSON.parse(l); console.log('[wa]', o.msg || '', JSON.stringify(o).slice(0, 400)); } catch (_) { console.log('[wa]', String(l).slice(0, 400)); } } }),
     printQRInTerminal: false,
     // modo celular: conecta como celular Android adicional (igual GB/OG em modo aparelho
     // conectado), que é o tipo de aparelho pra quem o WhatsApp entrega a visualização única
@@ -355,6 +357,11 @@ async function iniciar() {
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
+    if (connection || lastDisconnect) {
+      const e = lastDisconnect && lastDisconnect.error;
+      console.log('[conexão]', connection || '', e ? 'motivo=' + (e.output && e.output.statusCode) + ' ' + (e.message || '') : '',
+        update.isNewLogin ? 'novo login' : '', 'modo=' + (db.obterConfig().modo_celular ? 'celular' : 'computador'));
+    }
 
     if (qr) {
       ultimoQR = qr;

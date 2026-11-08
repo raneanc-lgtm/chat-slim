@@ -191,6 +191,15 @@ app.post('/api/config', (req, res) => {
   res.json(cfg);
 });
 
+// Registro do motor (o fim do motor.log) — pra ver por que uma conexão falhou
+app.get('/api/log', (req, res) => {
+  try {
+    const arq = require('path').join(process.env.NODEJS_MOBILE_APP_STORAGE || __dirname, 'motor.log');
+    const t = require('fs').readFileSync(arq, 'utf8');
+    res.type('text/plain').send(t.slice(-8000));
+  } catch (err) { res.type('text/plain').send('sem registro: ' + err.message); }
+});
+
 app.post('/api/modo-aparelho', async (req, res) => {
   try { res.json(await motor.trocarModoAparelho(!!(req.body && req.body.celular))); }
   catch (err) { res.status(500).json({ erro: err.message }); }
