@@ -869,18 +869,25 @@ async function enviarMensagem(jid, texto) {
 // Troca entre "computador" (igual WhatsApp Web) e "celular adicional" (recebe visualização única).
 // Precisa conectar de novo: desconecta, apaga a sessão e mostra a tela de conectar.
 async function trocarModoAparelho(celular) {
+  console.log('[conexão] trocando para modo', celular ? 'celular' : 'computador');
   db.definirConfig({ modo_celular: !!celular });
   const antigo = socketAtual;
   socketAtual = null;
-  if (antigo) {
-    try { await antigo.logout(); } catch (_) {}
-    try { antigo.end(undefined); } catch (_) {}
-  }
-  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
   statusConexao = 'desconectado';
   ultimoQR = null;
   emitir({ tipo: 'status', status: 'desconectado' });
-  setTimeout(iniciar, 1500);
+  if (antigo) {
+    // o socket velho não pode regravar a sessão depois que ela for apagada
+    try { antigo.ev.removeAllListeners('creds.update'); } catch (_) {}
+    try { await Promise.race([antigo.logout(), new Promise((r) => setTimeout(r, 5000))]); } catch (e) { console.log('[conexão] logout:', e.message); }
+    try { antigo.end(undefined); } catch (_) {}
+  }
+  await new Promise((r) => setTimeout(r, 1000));
+  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) { console.log('[conexão] apagar sessão:', e.message); }
+  setTimeout(() => {
+    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+    iniciar().catch((e) => console.log('[conexão] iniciar:', e.message));
+  }, 1000);
   return { ok: true, modo_celular: !!celular };
 }
 
