@@ -143,6 +143,70 @@ async function garantirNomeDoGrupo(jid) {
   } catch (_) {}
 }
 
+// Mensagem que é resposta de outra: guarda qual foi citada (pra mostrar o quadrinho em cima)
+async function extrairCitacao(conteudo) {
+  let ctx = null;
+  for (const v of Object.values(conteudo || {})) { if (v && typeof v === 'object' && v.contextInfo) { ctx = v.contextInfo; break; } }
+  if (!ctx || !ctx.stanzaId) return {};
+  const q = ctx.quotedMessage ? (normalizeMessageContent(ctx.quotedMessage) || ctx.quotedMessage) : null;
+  const tipoQ = q ? detectarTipo(q) : 'outro';
+  const rotulo = { imagem: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', documento: '📄 Documento', sticker: 'Figurinha' }[tipoQ];
+  const local = db.obterMensagem(ctx.stanzaId);
+  let autor = local ? (local.de_mim ? 'eu' : local.remetente_jid) : null;
+  if (!autor && ctx.participant) { try { autor = await paraNumero(ctx.participant); } catch (_) { autor = ctx.participant; } }
+  return {
+    citadaId: ctx.stanzaId,
+    citadaTexto: ((q && extrairTexto(q)) || rotulo || (local && local.texto) || 'Mensagem').slice(0, 200),
+    citadaAutor: autor,
+  };
+}
+
+async function processarReacao(m, r) {
+  if (!r || !r.key || !r.key.id) return;
+  let quem;
+  if (m.key.fromMe) quem = 'eu';
+  else {
+    const conv = await paraNumero(m.key.remoteJid, m.key.remoteJidAlt);
+    quem = conv.endsWith('@g.us') ? await paraNumero(m.key.participant, m.key.participantAlt) : conv;
+  }
+  if (db.definirReacao(r.key.id, quem, r.text || '')) {
+    const alvo = db.obterMensagem(r.key.id);
+    emitir({ tipo: 'reacao', id: r.key.id, conversaJid: alvo ? alvo.conversa_jid : null });
+  }
+}
+
+// Chave da mensagem no formato do WhatsApp (pra reagir/responder)
+function chaveDaMensagem(jid, m) {
+  const k = { remoteJid: jid, id: m.id, fromMe: !!m.de_mim };
+  if (jid.endsWith('@g.us') && !m.de_mim && m.remetente_jid) k.participant = m.remetente_jid;
+  return k;
+}
+
+async function reagir(msgId, emoji) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado no momento');
+  const m = db.obterMensagem(msgId);
+  if (!m) throw new Error('Mensagem não encontrada');
+  await socketAtual.sendMessage(m.conversa_jid, { react: { text: emoji || '', key: chaveDaMensagem(m.conversa_jid, m) } });
+  db.definirReacao(msgId, 'eu', emoji || '');
+  emitir({ tipo: 'reacao', id: msgId, conversaJid: m.conversa_jid });
+}
+
+// Encaminhar uma mensagem (texto ou mídia) pra outra conversa
+async function encaminhar(msgId, destino) {
+  const m = db.obterMensagem(msgId);
+  if (!m) throw new Error('Mensagem não encontrada');
+  if (m.tipo === 'texto') return enviarMensagem(destino, m.texto || '');
+  let arq = m.midia_path ? path.join(db.MIDIA_DIR, m.midia_path) : null;
+  if (!arq || !fs.existsSync(arq)) {
+    await baixarMidiaAntiga(msgId);
+    const de = db.obterMensagem(msgId);
+    arq = de && de.midia_path ? path.join(db.MIDIA_DIR, de.midia_path) : null;
+  }
+  if (!arq || !fs.existsSync(arq)) throw new Error('A mídia dessa mensagem não está disponível');
+  const de = db.obterMensagem(msgId);
+  return enviarMidia(destino, { caminhoArquivo: arq, mimetype: de.midia_mimetype || 'application/octet-stream', tipoMensagem: de.tipo, nomeArquivo: de.nome_arquivo, legenda: de.texto || '' });
+}
+
 /**
  * Guarda uma mensagem do WhatsApp.
  *   tempoReal = true  → chegou agora (baixa a mídia, conta como não lida, avisa a tela)
@@ -158,7 +222,8 @@ async function processarMensagem(m, tempoReal) {
   if (ignorarConversa(m.key.remoteJid)) return;
 
   const conteudo = normalizeMessageContent(m.message) || m.message;
-  if (conteudo.protocolMessage || conteudo.reactionMessage || conteudo.pollUpdateMessage) return;
+  if (conteudo.reactionMessage) return processarReacao(m, conteudo.reactionMessage);
+  if (conteudo.protocolMessage || conteudo.pollUpdateMessage) return;
   const tipo = detectarTipo(conteudo);
   if (tipo === 'outro') return;
 
@@ -169,6 +234,7 @@ async function processarMensagem(m, tempoReal) {
   if (ehGrupo && !deMim && remetenteJid && m.pushName) db.definirNomeContato(remetenteJid, m.pushName, 'perfil');
   const texto = extrairTexto(conteudo);
   const timestamp = (Number(m.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
+  const citacao = await extrairCitacao(conteudo);
 
   const { path: midiaPath, mimetype } = tempoReal
     ? await salvarMidiaSeHouver(m, conteudo, tipo)
@@ -195,6 +261,7 @@ async function processarMensagem(m, tempoReal) {
     midiaMimetype: mimetype,
     timestamp,
     ...extra,
+    ...citacao,
   });
 
   db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp, { id: m.key.id, deMim, status: Number(m.status) || 0 });
@@ -828,12 +895,18 @@ async function apagarConversa(jid) {
   return { noWhatsApp, erro };
 }
 
-async function enviarMensagem(jid, texto) {
+async function enviarMensagem(jid, texto, citadaId) {
   if (!socketAtual || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não está conectado no momento');
   }
   db.upsertConversa({ jid, nome: null, ehGrupo: jid.endsWith('@g.us') }); // conversa nova (iniciada por mim)
-  const resultado = await socketAtual.sendMessage(jid, { text: texto });
+  const citada = citadaId ? db.obterMensagem(citadaId) : null;
+  const opcoes = {};
+  if (citada) {
+    const rot = { imagem: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', documento: '📄 Documento', sticker: 'Figurinha' }[citada.tipo];
+    opcoes.quoted = { key: chaveDaMensagem(jid, citada), message: { conversation: citada.texto || rot || '' } };
+  }
+  const resultado = await socketAtual.sendMessage(jid, { text: texto }, opcoes);
   if (!resultado?.key?.id) {
     throw new Error('Mensagem não foi confirmada pelo servidor do WhatsApp');
   }
@@ -853,6 +926,9 @@ async function enviarMensagem(jid, texto) {
     midiaMimetype: null,
     timestamp,
     status: 2,
+    citadaId: citada ? citada.id : null,
+    citadaTexto: citada ? (citada.texto || '[' + citada.tipo + ']').slice(0, 200) : null,
+    citadaAutor: citada ? (citada.de_mim ? 'eu' : citada.remetente_jid) : null,
   });
   db.atualizarUltimaMensagem(jid, texto, timestamp, { id: resultado.key.id, deMim: true, status: 2 });
   emitir({ tipo: 'mensagem_nova', conversaJid: jid, texto, tipoMsg: 'texto' });
@@ -861,6 +937,8 @@ async function enviarMensagem(jid, texto) {
 }
 
 module.exports = {
+  reagir,
+  encaminhar,
   iniciar,
   onEvento,
   enviarMensagem,

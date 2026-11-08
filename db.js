@@ -295,8 +295,20 @@ function salvarMensagem(msg) {
       nome_arquivo: msg.nomeArquivo || null,
       unica: msg.unica ? 1 : 0,
       status: msg.status != null ? msg.status : (msg.deMim ? 2 : 0),
+      citada_id: msg.citadaId || null,
+      citada_texto: msg.citadaTexto || null,
+      citada_autor: msg.citadaAutor || null,
     })
     .write();
+}
+// Reação (emoji) numa mensagem: guarda uma por pessoa; emoji vazio = tirou a reação
+function definirReacao(id, quem, emoji) {
+  const m = db.get('mensagens').find({ id }).value();
+  if (!m) return false;
+  const reacoes = Object.assign({}, m.reacoes || {});
+  if (emoji) reacoes[quem] = emoji; else delete reacoes[quem];
+  db.get('mensagens').find({ id }).assign({ reacoes }).write();
+  return true;
 }
 
 function obterMensagem(id) {
@@ -388,6 +400,7 @@ module.exports = {
   upsertConversa,
   atualizarUltimaMensagem,
   atualizarStatusMensagem,
+  definirReacao,
   listarConversas,
   marcarLidas,
   definirNomeContato,

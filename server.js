@@ -62,15 +62,30 @@ app.get('/api/conversas/:jid/mensagens', (req, res) => {
   res.json(db.listarMensagens(decodeURIComponent(req.params.jid)));
 });
 
+// Reagir a uma mensagem (emoji vazio tira a reação)
+app.post('/api/mensagens/:id/reagir', async (req, res) => {
+  try { await motor.reagir(decodeURIComponent(req.params.id), (req.body && req.body.emoji) || ''); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+// Encaminhar mensagens pra uma ou mais conversas
+app.post('/api/encaminhar', async (req, res) => {
+  try {
+    const ids = (req.body && req.body.ids) || [], destinos = (req.body && req.body.destinos) || [];
+    let feitos = 0;
+    for (const d of destinos) for (const id of ids) { await motor.encaminhar(id, d); feitos++; }
+    res.json({ ok: true, feitos });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // Enviar mensagem de texto
 app.post('/api/conversas/:jid/mensagens', async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
-    const { texto } = req.body;
+    const { texto, citada } = req.body;
     if (!texto || !texto.trim()) {
       return res.status(400).json({ erro: 'Texto vazio' });
     }
-    await motor.enviarMensagem(jid, texto.trim());
+    await motor.enviarMensagem(jid, texto.trim(), citada || null);
     res.json({ ok: true });
   } catch (err) {
     console.error('Erro ao enviar mensagem:', err.message);
