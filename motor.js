@@ -442,9 +442,10 @@ async function iniciar() {
   // como estavam; quem conectar de novo pelo código já entra no modo completo.
   const minha = ++geracao;              // cada conexão tem um número; as velhas ficam surdas
   const ativo = () => minha === geracao;
-  const flagDesktop = path.join(AUTH_DIR, 'historico-completo.flag');
-  if (!state.creds.registered && !fs.existsSync(FLAG_WEB)) { try { fs.mkdirSync(AUTH_DIR, { recursive: true }); fs.writeFileSync(flagDesktop, '1'); } catch (_) {} }
-  const desktop = fs.existsSync(flagDesktop);
+  // modo "histórico completo" (WhatsApp Desktop) CANCELADO: travava sem gerar o QR.
+  // Conecta sempre como antes (WhatsApp Web).
+  try { fs.rmSync(path.join(AUTH_DIR, 'historico-completo.flag'), { force: true }); } catch (_) {}
+  const desktop = false;
   let teveQR = false;
   const sock = makeWASocket({
     version,
