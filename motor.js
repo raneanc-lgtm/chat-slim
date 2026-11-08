@@ -197,7 +197,7 @@ async function processarMensagem(m, tempoReal) {
     ...extra,
   });
 
-  db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp);
+  db.atualizarUltimaMensagem(conversaJid, texto || `[${tipo}]`, timestamp, { id: m.key.id, deMim, status: Number(m.status) || 0 });
   if (ehGrupo) garantirNomeDoGrupo(conversaJid);
 
   if (tempoReal) {
@@ -441,6 +441,11 @@ async function iniciar() {
         db.marcarComoApagada(u.key.id);
         const jid = mapaLid.get(normalizar(u.key.remoteJid)) || normalizar(u.key.remoteJidAlt) || u.key.remoteJid;
         emitir({ tipo: 'mensagem_apagada', id: u.key.id, conversaJid: jid });
+      } else if (u.update && u.update.status != null && u.key.fromMe) {
+        const st = Number(u.update.status);
+        db.atualizarStatusMensagem(u.key.id, st);
+        const jid = mapaLid.get(normalizar(u.key.remoteJid)) || normalizar(u.key.remoteJidAlt) || u.key.remoteJid;
+        emitir({ tipo: 'status_msg', id: u.key.id, conversaJid: jid, status: st });
       }
     }
   });
@@ -615,14 +620,8 @@ async function fotoDePerfil(jid) {
 // então, enquanto houver alguém na lista de aviso, o motor fica "disponível".
 const ultimoAvisoOnline = new Map();
 function avisarOnline(jid) {
-  if (!db.estaVigiado(jid)) return;
-  const ult = ultimoAvisoOnline.get(jid) || 0;
-  if (Date.now() - ult < 10 * 60 * 1000) return; // no máximo 1 aviso a cada 10 min por pessoa
-  ultimoAvisoOnline.set(jid, Date.now());
-  const nome = db.nomeDe(jid);
-  console.log('Online agora:', nome);
-  emitir({ tipo: 'alerta_online', jid, nome });
-  emitir({ tipo: 'notificar', canal: 'online', jid, titulo: nome, texto: '🟢 está online agora' });
+  // Online agora é nativo pra todos: aparece o pontinho verde na lista e na conversa,
+  // sem pop-up de notificação (seria um aviso por contato, viraria spam).
 }
 let vigiaTimer = null;
 // Online: aparece online enquanto você está usando o Zap (igual WhatsApp Web) ou
@@ -631,17 +630,19 @@ let vigiaTimer = null;
 async function atualizarVigia() {
   clearTimeout(vigiaTimer);
   if (!socketAtual || statusConexao !== 'conectado') return;
-  const lista = db.listarVigiados();
   const cfg = db.obterConfig();
-  const disponivel = !cfg.esconder_online && (appVisivel() || lista.length > 0);
+  // Online nativo pra todos: enquanto o Zap está aberto, fico disponível e assino a presença
+  // de TODAS as conversas recentes (sem precisar escolher ninguém). "Esconder meu online" desliga.
+  const disponivel = !cfg.esconder_online && appVisivel();
   try {
     await socketAtual.sendPresenceUpdate(disponivel ? 'available' : 'unavailable');
-    const alvos = new Set(lista);
-    if (appVisivel()) db.conversasRecentes(40).forEach((j) => alvos.add(j));
-    if (foco.jid && !foco.jid.endsWith('@g.us')) alvos.add(foco.jid);
-    for (const j of alvos) await socketAtual.presenceSubscribe(j).catch(() => {});
+    if (disponivel) {
+      const alvos = new Set(db.conversasRecentes(150));
+      if (foco.jid && !foco.jid.endsWith('@g.us')) alvos.add(foco.jid);
+      for (const j of alvos) await socketAtual.presenceSubscribe(j).catch(() => {});
+    }
   } catch (_) {}
-  if (lista.length || appVisivel()) vigiaTimer = setTimeout(atualizarVigia, appVisivel() ? 2 * 60 * 1000 : 4 * 60 * 1000);
+  if (appVisivel()) vigiaTimer = setTimeout(atualizarVigia, 2 * 60 * 1000);
 }
 let focoTimer = null;
 function definirFoco(visivel, jid) {

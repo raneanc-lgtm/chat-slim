@@ -64,12 +64,24 @@ function upsertConversa({ jid, nome, ehGrupo, naoLida }) {
 }
 
 // só avança: mensagem antiga do histórico não sobrescreve a última de verdade
-function atualizarUltimaMensagem(jid, texto, timestamp) {
+function atualizarUltimaMensagem(jid, texto, timestamp, meta) {
   const c = db.get('conversas').find({ jid }).value();
   if (!c || (c.ultima_mensagem_ts || 0) > timestamp) return;
   const mudar = { ultima_mensagem_ts: timestamp };
   if (texto !== null && texto !== undefined) mudar.ultima_mensagem_texto = texto;
+  if (meta) {
+    if (meta.id !== undefined) mudar.ultima_id = meta.id;
+    mudar.ultima_de_mim = meta.deMim ? 1 : 0;
+    mudar.ultima_status = meta.deMim ? (meta.status || 2) : 0; // só mensagem minha tem vezinho
+  }
   db.get('conversas').find({ jid }).assign(mudar).write();
+}
+// Atualiza o status de entrega/leitura de uma mensagem minha (2=enviada, 3=entregue, 4/5=lida)
+function atualizarStatusMensagem(id, status) {
+  const m = db.get('mensagens').find({ id }).value();
+  if (m && (m.status || 0) < status) db.get('mensagens').find({ id }).assign({ status }).write();
+  const c = db.get('conversas').find({ ultima_id: id }).value();
+  if (c && (c.ultima_status || 0) < status) db.get('conversas').find({ jid: c.jid }).assign({ ultima_status: status }).write();
 }
 
 function marcarLidas(jid) {
@@ -374,6 +386,7 @@ module.exports = {
   MIDIA_DIR,
   upsertConversa,
   atualizarUltimaMensagem,
+  atualizarStatusMensagem,
   listarConversas,
   marcarLidas,
   definirNomeContato,
