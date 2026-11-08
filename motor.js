@@ -471,11 +471,27 @@ async function assinarPresenca(jid) {
 async function sincronizarContatos() {
   if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
   const antes = db.contarContatosAgenda();
-  await socketAtual.resyncAppState(['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'], true);
+  // A agenda fica na coleção "critical_unblock_low". O WhatsApp só manda ela INTEIRA
+  // (snapshot) quando a versão local é zero; senão manda só o que mudou. Por isso
+  // zeramos a versão antes — igual ao WhatsApp Web quando conecta pela 1ª vez.
+  await socketAtual.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null } });
+  await socketAtual.resyncAppState(['critical_unblock_low'], true);
+  // contatos que vieram só com o código interno (@lid): tenta achar o número
+  let resolvidos = 0;
+  for (const lid of db.lidsSemNumero()) {
+    try {
+      const pn = await socketAtual.signalRepository?.lidMapping?.getPNForLID(lid);
+      if (pn) { lembrarLid(lid, pn); resolvidos++; }
+    } catch (_) {}
+  }
   const depois = db.contarContatosAgenda();
-  console.log(`Contatos sincronizados: ${antes} → ${depois}`);
+  const total = db.listarContatos().length;
+  console.log(`Agenda sincronizada: ${antes} → ${depois} com nome da agenda, ${total} pra conversar (${resolvidos} números achados)`);
   emitir({ tipo: 'conversas' });
-  return { antes, depois };
+  if (depois === 0) {
+    throw new Error('o WhatsApp não mandou a agenda. Isso acontece quando falta a chave de sincronização: desconecte o Zap em Aparelhos conectados e conecte de novo pelo código');
+  }
+  return { antes, depois, total };
 }
 
 // ---- Foto de perfil (guardada no aparelho por 1 dia) ----

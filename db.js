@@ -176,12 +176,32 @@ function definirVigiado(jid, ligar) {
   if (!ligar) db.get('vigiados').remove({ jid }).write();
 }
 
-// ---- Contatos pra iniciar conversa (só os que têm número e nome) ----
+// ---- Contatos pra iniciar conversa ----
+// Junta os contatos salvos pelo número e os que vieram só com o código interno (@lid),
+// sem repetir a mesma pessoa.
 function listarContatos() {
-  return db.get('contatos').value()
-    .filter((c) => c.jid && c.jid.endsWith('@s.whatsapp.net') && (c.nome_agenda || c.nome_perfil || c.nome))
-    .map((c) => ({ jid: c.jid, nome: c.nome_agenda || c.nome_perfil || c.nome, agenda: !!c.nome_agenda, numero: formatarNumero(c.jid) }))
-    .sort((a, b) => (b.agenda - a.agenda) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  const lids = {};
+  db.get('lids').value().forEach((x) => { lids[x.lid] = x.pn; });
+  const porJid = {};
+  for (const c of db.get('contatos').value()) {
+    if (!c.jid || c.jid.endsWith('@g.us')) continue;
+    const nome = c.nome_agenda || c.nome_perfil || c.nome;
+    if (!nome) continue;
+    let jid = c.jid;
+    if (jid.endsWith('@lid') && lids[jid]) jid = lids[jid];
+    if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) continue;
+    const atual = porJid[jid];
+    const agenda = !!c.nome_agenda;
+    if (!atual || (agenda && !atual.agenda)) {
+      porJid[jid] = { jid, nome, agenda, numero: jid.endsWith('@lid') ? 'contato do WhatsApp' : formatarNumero(jid) };
+    }
+  }
+  return Object.values(porJid).sort((a, b) => (b.agenda - a.agenda) || a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
+function lidsSemNumero() {
+  const mapeados = new Set(db.get('lids').map('lid').value());
+  return db.get('contatos').filter((c) => c.jid && c.jid.endsWith('@lid') && !mapeados.has(c.jid)).map('jid').value();
 }
 
 // ---- Apagar conversa ----
@@ -301,6 +321,7 @@ module.exports = {
   ultimaMensagem,
   apagarConversa,
   listarContatos,
+  lidsSemNumero,
   contarContatosAgenda,
   nomeDe,
   listarVigiados,
