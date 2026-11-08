@@ -50,6 +50,11 @@ sleep 4
 adb exec-out screencap -p > $R/4-voltou-pro-radio.png
 adb shell dumpsys activity activities | grep -E "topResumedActivity" | head -2
 
+echo "===== 4) Notificação: tocar abre o app ====="
+adb shell am start -W -n $PKG/br.com.slimcreative.chatslim.AbrirZap --es jid 5531999999999@s.whatsapp.net | grep -E "Status|Activity"
+sleep 5
+adb shell dumpsys activity activities | grep -E "topResumedActivity" | head -1
+adb shell run-as $PKG cat shared_prefs/zap.xml
 echo "===== LOGCAT (erros) ====="
 adb logcat -d | grep -E "FATAL EXCEPTION|AndroidRuntime|CHATSLIM|ChatSlim|nodejs  :|cambio" | grep -v AppsFilter | tail -120
 } 2>&1 | tee $R/relatorio.txt
