@@ -111,6 +111,35 @@ public final class Integracao {
             return Config.porta(act);
         }
 
+        /**
+         * Fecha o Radinho de vez: desliga o motor do Zap (processo :motor), sai da tela
+         * e encerra o app. O rádio a página já desligou antes (standby vazio).
+         * Nada fica rodando até você abrir de novo.
+         */
+        @JavascriptInterface
+        public void fecharTudo() {
+            act.runOnUiThread(() -> {
+                Context app = act.getApplicationContext();
+                try {
+                    synchronized (Integracao.class) {
+                        if (conexao != null) { try { app.unbindService(conexao); } catch (Throwable ignored) {} conexao = null; }
+                    }
+                } catch (Throwable ignored) {}
+                try { app.stopService(new Intent(app, MotorService.class)); } catch (Throwable ignored) {}
+                try {
+                    android.app.ActivityManager am = (android.app.ActivityManager) app.getSystemService(Context.ACTIVITY_SERVICE);
+                    for (android.app.ActivityManager.RunningAppProcessInfo pi : am.getRunningAppProcesses()) {
+                        if (pi.processName != null && pi.processName.endsWith(":motor")) android.os.Process.killProcess(pi.pid);
+                    }
+                } catch (Throwable ignored) {}
+                try { act.finishAndRemoveTask(); } catch (Throwable ignored) {}
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    android.os.Process.killProcess(android.os.Process.myPid());
+                    System.exit(0);
+                }, 700);
+            });
+        }
+
         /** Abre um link fora do app (mapa, site, telefone...). */
         @JavascriptInterface
         public void abrirLink(String url) {
