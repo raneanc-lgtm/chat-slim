@@ -366,6 +366,43 @@ function guardarExtrasDeMidia(m, conteudo, tipo, midiaPath) {
 }
 
 // Baixa agora uma mídia que chegou antes (do histórico)
+// ---- Transcrever áudio (Groq / Whisper). A chave fica só no celular, no banco do Zap. ----
+const transcrevendo = new Map();
+async function transcreverAudio(id) {
+  const msg = db.obterMensagem(id);
+  if (!msg || msg.tipo !== 'audio') throw new Error('Essa mensagem não é um áudio');
+  if (msg.transcricao) return { texto: msg.transcricao };
+  const chave = (db.obterConfig().transcricao_chave || '').trim();
+  if (!chave) { const e = new Error('Falta a chave da transcrição'); e.semChave = true; throw e; }
+  if (transcrevendo.has(id)) return transcrevendo.get(id);
+  const p = (async () => {
+    const arq = msg.midia_path || await baixarMidiaAntiga(id);
+    const buffer = fs.readFileSync(path.join(db.MIDIA_DIR, arq));
+    if (buffer.length > 24 * 1024 * 1024) throw new Error('Áudio grande demais pra transcrever (máx. 25 MB)');
+    const ext = (/\.(\w+)$/.exec(arq) || [, 'ogg'])[1].replace('opus', 'ogg');
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: 'audio/ogg' }), 'audio.' + (['ogg', 'mp3', 'm4a', 'wav', 'webm', 'mp4', 'mpeg', 'flac'].includes(ext) ? ext : 'ogg'));
+    form.append('model', 'whisper-large-v3-turbo');
+    form.append('language', 'pt');
+    form.append('response_format', 'json');
+    const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 60000);
+    let r;
+    try {
+      r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: 'Bearer ' + chave }, body: form, signal: ctrl.signal });
+    } catch (e) { throw new Error(e.name === 'AbortError' ? 'A transcrição demorou demais' : 'Sem internet pra transcrever'); }
+    finally { clearTimeout(to); }
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) throw new Error('A chave da transcrição está errada ou foi apagada');
+    if (r.status === 429) throw new Error('Muitas transcrições seguidas, espere um pouquinho');
+    if (!r.ok) throw new Error((j.error && j.error.message) || ('Erro ' + r.status + ' na transcrição'));
+    const texto = String(j.text || '').trim() || '(sem fala no áudio)';
+    db.definirTranscricao(id, texto);
+    return { texto };
+  })();
+  transcrevendo.set(id, p);
+  try { return await p; } finally { transcrevendo.delete(id); }
+}
+
 async function baixarMidiaAntiga(id) {
   const msg = db.obterMensagem(id);
   if (!msg) throw new Error('mensagem não encontrada');
@@ -1289,6 +1326,7 @@ async function enviarMensagem(jid, texto, citadaId) {
 module.exports = {
   recuperarContatos,
   enviarEspecial,
+  transcreverAudio,
   recusarChamada,
   _tratarChamadas: (l) => tratarChamadas(l),
   _testeSocket: (sk) => { socketAtual = sk; statusConexao = 'conectado'; },

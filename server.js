@@ -261,7 +261,17 @@ app.post('/api/foco', (req, res) => {
 });
 
 // ---- Configurações ----
-app.get('/api/config', (req, res) => res.json(db.obterConfig()));
+app.get('/api/config', (req, res) => { const c = { ...db.obterConfig() }; c.transcricao_tem = !!c.transcricao_chave; delete c.transcricao_chave; res.json(c); });
+// ---- Transcrição de áudio ----
+app.post('/api/transcricao/chave', (req, res) => {
+  const chave = String((req.body || {}).chave || '').trim();
+  db.definirConfig({ transcricao_chave: chave });
+  res.json({ ok: true, tem: !!chave });
+});
+app.post('/api/mensagens/:id/transcrever', async (req, res) => {
+  try { res.json(await motor.transcreverAudio(decodeURIComponent(req.params.id))); }
+  catch (err) { res.status(err.semChave ? 412 : 400).json({ erro: err.message, semChave: !!err.semChave }); }
+});
 app.post('/api/config', (req, res) => {
   const permitido = {};
   if (req.body && 'esconder_online' in req.body) permitido.esconder_online = !!req.body.esconder_online;

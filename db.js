@@ -339,6 +339,10 @@ function definirReacao(id, quem, emoji) {
   return true;
 }
 
+function definirTranscricao(id, texto) {
+  db.get('mensagens').find({ id }).assign({ transcricao: texto }).write();
+}
+
 function obterMensagem(id) {
   return db.get('mensagens').find({ id }).value();
 }
@@ -463,6 +467,7 @@ module.exports = {
   apagarConversa,
   listarContatos,
   obterMensagem,
+  definirTranscricao,
   definirMidia,
   midiasDaConversa,
   obterConversa,
