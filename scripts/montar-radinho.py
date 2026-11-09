@@ -132,6 +132,8 @@ def main():
         <meta-data android:name="chatslim.embutido" android:value="true"/>
     </application>'''
     m = m.replace('</application>', componentes, 1)
+    # fechar o app (arrastar da lista ou voltar na tela inicial) = parar: o rádio não fica rodando por trás
+    m = re.sub(r'(<service[^>]*android:name="\.RadioService"[^>]*?)android:stopWithTask="false"', r'\1android:stopWithTask="true"', m)
     perm = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
     if 'WRITE_EXTERNAL_STORAGE' not in m:
         m = m.replace('<application ', perm + '\n    <application ', 1)

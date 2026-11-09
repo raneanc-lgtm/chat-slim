@@ -59,4 +59,13 @@ public class MotorService extends Service {
     public IBinder onBind(Intent intent) {
         return new Binder();
     }
+
+    /** Embutido no Radinho: o app fechou (ninguém mais ligado ao motor) — encerra o motor junto. */
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (Config.embutido(this)) {
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }
+    }
 }
