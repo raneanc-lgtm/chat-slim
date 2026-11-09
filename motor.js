@@ -610,12 +610,30 @@ async function iniciar() {
         db.marcarComoApagada(u.key.id);
         const jid = mapaLid.get(normalizar(u.key.remoteJid)) || normalizar(u.key.remoteJidAlt) || u.key.remoteJid;
         emitir({ tipo: 'mensagem_apagada', id: u.key.id, conversaJid: jid });
+      } else if (u.update && u.update.status != null && !u.key.fromMe && Number(u.update.status) >= 4) {
+        // você leu essa mensagem em outro aparelho (no WhatsApp oficial): some a notificação
+        paraNumero(u.key.remoteJid, u.key.remoteJidAlt).then((jid) => conversaLida(jid)).catch(() => {});
       } else if (u.update && u.update.status != null && u.key.fromMe) {
         const st = Number(u.update.status);
         db.atualizarStatusMensagem(u.key.id, st);
         const jid = mapaLid.get(normalizar(u.key.remoteJid)) || normalizar(u.key.remoteJidAlt) || u.key.remoteJid;
         emitir({ tipo: 'status_msg', id: u.key.id, conversaJid: jid, status: st });
       }
+    }
+  });
+
+  // grupo lido no WhatsApp oficial: o recibo de leitura de mensagem que NÃO é minha só vem de aparelho meu
+  sock.ev.on('message-receipt.update', async (lista) => {
+    if (!ativo()) return;
+    for (const r of lista || []) {
+      if (r && r.key && !r.key.fromMe && r.receipt && r.receipt.readTimestamp) { try { conversaLida(await paraNumero(r.key.remoteJid)); } catch (_) {} }
+    }
+  });
+  // conversa marcada como lida em outro aparelho (WhatsApp oficial)
+  sock.ev.on('chats.update', async (lista) => {
+    if (!ativo()) return;
+    for (const c of lista || []) {
+      if (c && c.id && c.unreadCount === 0) { try { conversaLida(await paraNumero(c.id)); } catch (_) {} }
     }
   });
 
@@ -927,10 +945,21 @@ async function atualizarVigia() {
   if (appVisivel()) vigiaTimer = setTimeout(atualizarVigia, 2 * 60 * 1000);
 }
 let focoTimer = null;
+// conversa lida (aqui ou no WhatsApp oficial): zera o contador e apaga a notificação do celular
+const lidasRecentes = new Map();
+function conversaLida(jid) {
+  if (!jid) return;
+  const ult = lidasRecentes.get(jid) || 0;
+  if (Date.now() - ult < 1500) return;               // várias confirmações juntas: uma vez só
+  lidasRecentes.set(jid, Date.now());
+  const c = db.obterConversa(jid);
+  if (c && c.nao_lidas) { db.marcarLidas(jid); emitir({ tipo: 'conversas' }); }
+  emitir({ tipo: 'limpar_notificacao', jid });
+}
 function definirFoco(visivel, jid) {
   const mudou = visivel !== foco.visivel || jid !== foco.jid;
   foco = { visivel: !!visivel, jid: jid || null, em: Date.now() };
-  if (foco.jid && visivel) db.marcarLidas(foco.jid);
+  if (foco.jid && visivel) conversaLida(foco.jid);
   if (mudou) atualizarVigia();
   clearTimeout(focoTimer);
   if (visivel) focoTimer = setTimeout(() => atualizarVigia(), 95 * 1000); // se o app parar de avisar, volta a ficar escondido

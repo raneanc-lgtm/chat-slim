@@ -76,10 +76,19 @@ public final class AvisosZap {
                 // o motor decide QUANDO notificar (respeita silenciar, app aberto etc.);
                 // aqui só mostramos — assim dá pra mudar as regras sem APK novo
                 if ("notificar".equals(ev.optString("tipo"))) notificar(ctx, ev);
+                else if ("limpar_notificacao".equals(ev.optString("tipo"))) limpar(ctx, ev.optString("jid", ""));
             }
         } finally {
             c.disconnect();
         }
+    }
+
+    /** Conversa lida (no Zap ou no WhatsApp oficial): tira a notificação dela da barra. */
+    private static void limpar(Context ctx, String jid) {
+        try {
+            NotificationManager nm = ctx.getSystemService(NotificationManager.class);
+            nm.cancel(9000 + (jid.hashCode() & 0x7ff));
+        } catch (Exception ignored) {}
     }
 
     private static void notificar(Context ctx, JSONObject ev) {
