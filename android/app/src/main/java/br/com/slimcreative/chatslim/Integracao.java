@@ -34,9 +34,8 @@ public final class Integracao {
             // a página do Radinho (https://appassets...) conversa com o motor local (http://127.0.0.1)
             web.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         } catch (Throwable ignored) {}
-        // liga o motor um pouco depois, pra não disputar processador com a abertura do Radinho
-        final Context app = act.getApplicationContext();
-        new Handler(Looper.getMainLooper()).postDelayed(() -> ligarMotor(app), 2500);
+        // liga o motor já (ele roda em outro processo, não atrapalha a abertura da tela)
+        ligarMotor(act.getApplicationContext());
     }
 
     /**
