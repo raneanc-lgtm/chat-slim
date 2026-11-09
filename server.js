@@ -94,6 +94,14 @@ app.post('/api/conversas/:jid/mensagens', async (req, res) => {
 });
 
 // Enviar mídia (foto, vídeo, áudio, documento, sticker)
+// ---- Chamadas ----
+app.get('/api/chamadas', (req, res) => res.json({ lista: db.listarChamadas(), novas: db.contarChamadasNovas() }));
+app.post('/api/chamadas/vistas', (req, res) => { db.marcarChamadasVistas(); res.json({ ok: true, novas: db.contarChamadasNovas() }); });
+app.post('/api/chamadas/:id/recusar', async (req, res) => {
+  try { res.json(await motor.recusarChamada(decodeURIComponent(req.params.id))); }
+  catch (err) { res.status(400).json({ erro: err.message }); }
+});
+
 app.post('/api/conversas/:jid/especial', async (req, res) => {
   try { res.json(await motor.enviarEspecial(decodeURIComponent(req.params.jid), (req.body || {}).tipo, (req.body || {}).dados)); }
   catch (err) { res.status(400).json({ erro: err.message }); }

@@ -621,6 +621,9 @@ async function iniciar() {
 
   // ---- Presença (online/offline/digitando) ----
   const timersDigitando = new Map();
+  // ---- Chamadas: avisa, registra e deixa recusar (falar é no WhatsApp oficial) ----
+  sock.ev.on('call', async (lista) => { if (ativo()) await tratarChamadas(lista); });
+
   sock.ev.on('presence.update', async ({ id, presences }) => {
     for (const [jidBruto, info] of Object.entries(presences)) {
       const participanteJid = await paraNumero(jidBruto);
@@ -1123,6 +1126,45 @@ async function responderStatus(statusId, texto) {
 }
 
 // ---- Anexos especiais: localização, contato, enquete, evento, Pix ----
+// ---- Chamadas: avisa, registra e deixa recusar (falar é no WhatsApp oficial) ----
+async function tratarChamadas(lista) {
+    for (const c of lista || []) {
+      try {
+        const de = await paraNumero(c.from, c.callerPn);
+        const ex = db.obterChamada(c.id);
+        const final = { reject: 'recusada', accept: 'atendida', timeout: 'perdida' }[c.status];
+        let status = ex ? ex.status : 'tocando';
+        if (c.status === 'offer' || c.status === 'ringing') { if (!ex) status = 'tocando'; }
+        else if (final) status = final;
+        else if (c.status === 'terminate' && status === 'tocando') status = 'perdida';
+        const reg = db.registrarChamada({
+          id: c.id, de, deOriginal: c.from, video: !!c.isVideo, grupo: !!c.isGroup,
+          ts: ex ? ex.ts : (c.date ? new Date(c.date).getTime() : Date.now()), status,
+          ...(status === 'perdida' || status === 'tocando' ? {} : { vista: true }),
+        });
+        const nome = db.nomeDe(de);
+        emitir({ tipo: 'chamada', id: c.id, de, nome, video: !!c.isVideo, status, novas: db.contarChamadasNovas() });
+        if (!ex && status === 'tocando' && !c.offline) {
+          emitir({ tipo: 'notificar', canal: 'mensagens', jid: de, titulo: nome, texto: (c.isVideo ? '🎥 Chamada de vídeo' : '📞 Chamada de voz') + ' do WhatsApp — atenda no app oficial', naoLidas: 1 });
+        } else if (ex && ex.status === 'tocando' && status === 'perdida') {
+          emitir({ tipo: 'notificar', canal: 'mensagens', jid: de, titulo: nome, texto: (c.isVideo ? '🎥 Chamada de vídeo perdida' : '📞 Chamada de voz perdida'), naoLidas: 1 });
+        }
+        console.log('[chamada] ' + nome + ' ' + (c.isVideo ? 'vídeo' : 'voz') + ' → ' + c.status + ' (' + status + ')');
+        void reg;
+      } catch (e) { console.error('chamada:', e.message); }
+    }
+}
+
+async function recusarChamada(id) {
+  const c = db.obterChamada(id);
+  if (!c) throw new Error('Chamada não encontrada');
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  await socketAtual.rejectCall(c.id, c.deOriginal || c.de);
+  db.registrarChamada({ id: c.id, status: 'recusada', vista: true });
+  emitir({ tipo: 'chamada', id: c.id, de: c.de, nome: db.nomeDe(c.de), video: c.video, status: 'recusada', novas: db.contarChamadasNovas() });
+  return { ok: true };
+}
+
 async function enviarEspecial(jid, tipo, d) {
   if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado no momento');
   d = d || {};
@@ -1218,6 +1260,8 @@ async function enviarMensagem(jid, texto, citadaId) {
 module.exports = {
   recuperarContatos,
   enviarEspecial,
+  recusarChamada,
+  _tratarChamadas: (l) => tratarChamadas(l),
   _testeSocket: (sk) => { socketAtual = sk; statusConexao = 'conectado'; },
   reconectarCompleto,
   resetarConexao,

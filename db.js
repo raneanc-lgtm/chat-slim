@@ -29,7 +29,7 @@ if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 const adapter = new FileSync(path.join(DATA_DIR, 'chatslim.json'));
 const db = low(adapter);
 
-db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [], vigiados: [], status_silenciados: [], config: {} }).write();
+db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [], vigiados: [], status_silenciados: [], chamadas: [], config: {} }).write();
 
 // Limpeza de dados antigos: versões anteriores guardavam status e canais como se fossem conversa
 (function limparLixo() {
@@ -423,8 +423,31 @@ function obterPresenca(jid) {
   return db.get('presenca').find({ jid }).value();
 }
 
+// ---- Chamadas (só o registro: a voz/vídeo acontece no WhatsApp oficial) ----
+function registrarChamada(c) {
+  const lista = db.get('chamadas');
+  const ex = lista.find({ id: c.id }).value();
+  if (ex) { lista.find({ id: c.id }).assign(c).write(); return lista.find({ id: c.id }).value(); }
+  lista.push({ vista: false, ...c }).write();
+  // guarda as 300 mais novas
+  const todas = lista.sortBy('ts').value();
+  if (todas.length > 300) db.set('chamadas', todas.slice(-300)).write();
+  return c;
+}
+function listarChamadas() {
+  return db.get('chamadas').sortBy('ts').reverse().take(300).value().map((c) => ({ ...c, nome: nomeDe(c.de) }));
+}
+function obterChamada(id) { return db.get('chamadas').find({ id: String(id) }).value() || null; }
+function marcarChamadasVistas() { db.get('chamadas').filter({ vista: false }).each((c) => { if (c.status !== 'tocando') c.vista = true; }).value(); db.write(); }
+function contarChamadasNovas() { return db.get('chamadas').filter((c) => !c.vista && (c.status === 'perdida' || c.status === 'tocando')).size().value(); }
+
 module.exports = {
   MIDIA_DIR,
+  registrarChamada,
+  listarChamadas,
+  obterChamada,
+  marcarChamadasVistas,
+  contarChamadasNovas,
   upsertConversa,
   atualizarUltimaMensagem,
   atualizarStatusMensagem,
