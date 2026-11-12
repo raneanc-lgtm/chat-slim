@@ -36,6 +36,50 @@ public final class Integracao {
         } catch (Throwable ignored) {}
         // liga o motor já (ele roda em outro processo, não atrapalha a abertura da tela)
         ligarMotor(act.getApplicationContext());
+        // vigia o "arrastar da lista de apps": fecha tudo ou deixa rodando, conforme a escolha nas configurações
+        try { act.startService(new Intent(act, FechaJunto.class)); } catch (Throwable ignored) {}
+    }
+
+    /** Escolha do usuário: true = continua rodando em segundo plano quando fecha; false = fechar para tudo. */
+    public static boolean manter(Context ctx) {
+        return ctx.getSharedPreferences("zap", Context.MODE_PRIVATE).getBoolean("manter_aberto", false);
+    }
+
+    /** Para o serviço do rádio (pelo nome, pra não depender do pacote do app que embute). */
+    static void pararRadio(Context app) {
+        try {
+            android.content.pm.PackageInfo pi = app.getPackageManager().getPackageInfo(app.getPackageName(), PackageManager.GET_SERVICES);
+            if (pi.services != null) for (android.content.pm.ServiceInfo si : pi.services) {
+                if (si.name != null && si.name.endsWith(".RadioService")) {
+                    try { app.stopService(new Intent().setClassName(app, si.name)); } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** Desliga motor e rádio e encerra o processo (usado quando a tarefa é arrastada da lista de apps). */
+    static void pararTudo(Context app) {
+        try {
+            synchronized (Integracao.class) {
+                if (conexao != null) { try { app.unbindService(conexao); } catch (Throwable ignored) {} conexao = null; }
+            }
+        } catch (Throwable ignored) {}
+        try { app.stopService(new Intent(app, MotorService.class)); } catch (Throwable ignored) {}
+        matarMotor(app);
+        pararRadio(app);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            android.os.Process.killProcess(android.os.Process.myPid());
+            System.exit(0);
+        }, 500);
+    }
+
+    private static void matarMotor(Context app) {
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) app.getSystemService(Context.ACTIVITY_SERVICE);
+            for (android.app.ActivityManager.RunningAppProcessInfo pi : am.getRunningAppProcesses()) {
+                if (pi.processName != null && pi.processName.endsWith(":motor")) android.os.Process.killProcess(pi.pid);
+            }
+        } catch (Throwable ignored) {}
     }
 
     /**
@@ -48,13 +92,16 @@ public final class Integracao {
             web.evaluateJavascript("(function(){try{return window.radinhoVoltar?radinhoVoltar():false}catch(e){return false}})()",
                     v -> {
                         if (!"true".equals(v)) {
+                            // escolheu manter aberto: só sai da frente; rádio e Zap continuam por trás
+                            if (manter(act)) { try { act.moveTaskToBack(true); } catch (Throwable e2) { act.finish(); } return; }
                             // nada aberto: fechar o app = parar tudo (igual ao "Parar" do Android)
                             try { web.evaluateJavascript("try{window.radinhoFechando&&radinhoFechando()}catch(e){}", null); } catch (Throwable ignored) {}
                             new Handler(Looper.getMainLooper()).postDelayed(() -> encerrar(act), 600);
                         }
                     });
         } catch (Throwable e) {
-            encerrar(act);
+            if (manter(act)) { try { act.moveTaskToBack(true); } catch (Throwable e2) { act.finish(); } }
+            else encerrar(act);
         }
     }
 
@@ -67,12 +114,8 @@ public final class Integracao {
             }
         } catch (Throwable ignored) {}
         try { app.stopService(new Intent(app, MotorService.class)); } catch (Throwable ignored) {}
-        try {
-            android.app.ActivityManager am = (android.app.ActivityManager) app.getSystemService(Context.ACTIVITY_SERVICE);
-            for (android.app.ActivityManager.RunningAppProcessInfo pi : am.getRunningAppProcesses()) {
-                if (pi.processName != null && pi.processName.endsWith(":motor")) android.os.Process.killProcess(pi.pid);
-            }
-        } catch (Throwable ignored) {}
+        matarMotor(app);
+        pararRadio(app);
         try { act.finishAndRemoveTask(); } catch (Throwable ignored) {}
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             android.os.Process.killProcess(android.os.Process.myPid());
@@ -112,7 +155,18 @@ public final class Integracao {
 
         @JavascriptInterface
         public int versao() {
-            return 4;
+            return 5;
+        }
+
+        /** Configuração "Manter aberto em segundo plano": liga/desliga e consulta. */
+        @JavascriptInterface
+        public void manterAberto(boolean ligar) {
+            act.getSharedPreferences("zap", Context.MODE_PRIVATE).edit().putBoolean("manter_aberto", ligar).apply();
+        }
+
+        @JavascriptInterface
+        public boolean manterAbertoAtual() {
+            return manter(act);
         }
 
         /** Conversa que a pessoa tocou na notificação (e limpa). */

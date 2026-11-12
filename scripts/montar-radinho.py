@@ -120,6 +120,8 @@ def main():
             android:windowSoftInputMode="adjustResize" android:theme="@android:style/Theme.Material.NoActionBar"/>
         <service android:name="br.com.slimcreative.chatslim.MotorService" android:exported="false"
             android:process=":motor"/>
+        <service android:name="br.com.slimcreative.chatslim.FechaJunto" android:exported="false"
+            android:stopWithTask="false"/>
         <activity android:name="br.com.slimcreative.chatslim.AbrirZap" android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
         <receiver android:name="br.com.slimcreative.chatslim.BootMotor" android:exported="true">
@@ -132,8 +134,8 @@ def main():
         <meta-data android:name="chatslim.embutido" android:value="true"/>
     </application>'''
     m = m.replace('</application>', componentes, 1)
-    # fechar o app (arrastar da lista ou voltar na tela inicial) = parar: o rádio não fica rodando por trás
-    m = re.sub(r'(<service[^>]*android:name="\.RadioService"[^>]*?)android:stopWithTask="false"', r'\1android:stopWithTask="true"', m)
+    # arrastar da lista de apps: quem decide é o FechaJunto (configuração "Manter aberto em segundo plano");
+    # por isso o serviço do rádio NÃO para sozinho com a tarefa
     perm = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
     if 'WRITE_EXTERNAL_STORAGE' not in m:
         m = m.replace('<application ', perm + '\n    <application ', 1)
