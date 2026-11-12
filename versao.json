@@ -1,0 +1,8 @@
+{
+ "versao": 58,
+ "arquivos": {
+  "app.js": "694aa984e0ff9acb783e1332d98c9d9cf6625a8fbf955c5a2be4318065291a85",
+  "main.js": "1359db2aacb5d28e2a284110e88fce9f78efac181b3647750786d6b8e7544c5e",
+  "public/index.html": "cb72d55f62f14481975cbe591777d3c53e459e94d61e9a42edb223be2fb99e1c"
+ }
+}
