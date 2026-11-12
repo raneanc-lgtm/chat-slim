@@ -124,18 +124,27 @@ def main():
             android:stopWithTask="false"/>
         <activity android:name="br.com.slimcreative.chatslim.AbrirZap" android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
-        <receiver android:name="br.com.slimcreative.chatslim.BootMotor" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
-            </intent-filter>
-        </receiver>
         <meta-data android:name="chatslim.porta" android:value="{PORTA_EMBUTIDO}"/>
         <meta-data android:name="chatslim.embutido" android:value="true"/>
     </application>'''
     m = m.replace('</application>', componentes, 1)
     # arrastar da lista de apps: quem decide é o FechaJunto (configuração "Manter aberto em segundo plano");
     # por isso o serviço do rádio NÃO para sozinho com a tarefa
+
+    # ANTIVÍRUS: o amontoado "mic + câmera + localização + autostart + overlay + ignorar-bateria"
+    # casa com a assinatura de espião/stalkerware. Tiramos as permissões perigosas que o app não
+    # usa de verdade, pra não cair no falso positivo (nenhuma função é perdida):
+    #  - CAMERA: o anexo de foto usa o seletor do sistema (input type=file capture), que chama o
+    #    app de Câmera do Android — não precisa da permissão aqui.
+    #  - SYSTEM_ALERT_WINDOW (desenhar por cima): declarada mas nenhum código usa.
+    #  - RECEIVE_BOOT_COMPLETED + receiver .Boot (ligar sozinho ao reiniciar o celular).
+    #  - REQUEST_IGNORE_BATTERY_OPTIMIZATIONS (ninguém pede isso em runtime).
+    for p in ('CAMERA', 'SYSTEM_ALERT_WINDOW', 'RECEIVE_BOOT_COMPLETED',
+              'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'):
+        m = re.sub(r'\s*<uses-permission android:name="android\.permission\.' + p + r'"\s*/>', '', m)
+    # tira qualquer <receiver> que escute BOOT_COMPLETED (autostart do rádio)
+    m = re.sub(r'\s*<receiver\b(?:(?!</receiver>|/>).)*?BOOT_COMPLETED.*?</receiver>', '', m, flags=re.S)
+
     perm = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
     if 'WRITE_EXTERNAL_STORAGE' not in m:
         m = m.replace('<application ', perm + '\n    <application ', 1)
