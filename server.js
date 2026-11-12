@@ -94,6 +94,9 @@ app.post('/api/conversas/:jid/mensagens', async (req, res) => {
 });
 
 // Enviar mídia (foto, vídeo, áudio, documento, sticker)
+// Grava já o que estiver pendente (a tela chama ao minimizar/fechar o app)
+app.post('/api/salvar-agora', (req, res) => { try { db.salvarAgora(); } catch (_) {} res.json({ ok: true }); });
+
 // ---- Chamadas ----
 app.get('/api/chamadas', (req, res) => res.json({ lista: db.listarChamadas(), novas: db.contarChamadasNovas() }));
 app.post('/api/chamadas/vistas', (req, res) => { db.marcarChamadasVistas(); res.json({ ok: true, novas: db.contarChamadasNovas() }); });

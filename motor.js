@@ -37,8 +37,22 @@ let envios = 0; // envios em andamento (a atualização espera zerar pra reinici
 
 // callbacks pra avisar o servidor web de eventos novos (SSE)
 const ouvintes = new Set();
+let timerConversas = null;
+const ultimaPresencaEmitida = new Map();
+function emitirJa(evento) { for (const cb of ouvintes) cb(evento); }
 function emitir(evento) {
-  for (const cb of ouvintes) cb(evento);
+  // "conversas" chega em rajada (histórico, várias mensagens juntas): junta tudo num aviso só
+  if (evento && evento.tipo === 'conversas') {
+    if (!timerConversas) timerConversas = setTimeout(() => { timerConversas = null; emitirJa({ tipo: 'conversas' }); }, 300);
+    return;
+  }
+  // presença igual à última que já mandei: não repete (o WhatsApp reenvia muito)
+  if (evento && evento.tipo === 'presenca') {
+    const chave = evento.status + '|' + (evento.visto_em || '');
+    if (ultimaPresencaEmitida.get(evento.jid) === chave) return;
+    ultimaPresencaEmitida.set(evento.jid, chave);
+  }
+  emitirJa(evento);
 }
 function onEvento(cb) {
   ouvintes.add(cb);
@@ -483,7 +497,7 @@ async function processarStatus(m, tempoReal) {
 }
 
 let historicoCompleto = false;
-let geracao = 0, falhasDesktop = 0;
+let geracao = 0, falhasDesktop = 0, falhasSeguidas = 0;
 const FLAG_WEB = path.join(BASE_DIR, 'modo-web.flag');
 
 // Começar do zero: sai da conta (se der), apaga só o login e sobe uma conexão nova
@@ -504,9 +518,29 @@ async function resetarConexao(sairDaConta) {
   return { ok: true };
 }
 
+// A versão do WhatsApp Web era consultada na internet a CADA reconexão (1 a 3 s, ou trava com rede ruim).
+// Agora fica guardada: usa a guardada na hora e renova por trás, no máximo de 12 em 12 horas.
+let versaoMem = null, versaoBuscando = false;
+async function versaoDoWhatsApp() {
+  const cfg = db.obterConfig();
+  if (!versaoMem && Array.isArray(cfg.wa_versao) && cfg.wa_versao.length === 3) versaoMem = cfg.wa_versao;
+  const renovar = async () => {
+    if (versaoBuscando) return versaoMem;
+    versaoBuscando = true;
+    try {
+      const r = await Promise.race([fetchLatestBaileysVersion(), new Promise((ok) => setTimeout(() => ok(null), 6000))]);
+      if (r && Array.isArray(r.version)) { versaoMem = r.version; db.definirConfig({ wa_versao: r.version, wa_versao_em: Date.now() }); }
+    } catch (_) {} finally { versaoBuscando = false; }
+    return versaoMem;
+  };
+  if (!versaoMem) return (await renovar()) || undefined;        // primeira vez: precisa buscar
+  if (Date.now() - (cfg.wa_versao_em || 0) > 12 * 3600 * 1000) renovar();   // por trás, sem esperar
+  return versaoMem;
+}
+
 async function iniciar() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await versaoDoWhatsApp();
 
   // Histórico completo: o celular só manda TUDO (anos de conversas e contatos) na hora de
   // conectar, e só pra quem se apresenta como WhatsApp Desktop. Conexões antigas continuam
@@ -524,6 +558,8 @@ async function iniciar() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     markOnlineOnConnect: false, // não força seu próprio status online ao conectar
+    keepAliveIntervalMs: 20000,  // percebe conexão morta mais rápido
+    connectTimeoutMs: 15000,
     ...(desktop ? { browser: Browsers.macOS('Desktop'), syncFullHistory: true } : {}),
   });
   historicoCompleto = desktop;
@@ -554,9 +590,13 @@ async function iniciar() {
       if (motivo === DisconnectReason.loggedOut) return resetarConexao(false);
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
-      setTimeout(() => { if (ativo()) iniciar(); }, 2000);
+      // 405 = versão do WhatsApp recusada: esquece a guardada pra buscar outra
+      if (motivo === 405) { versaoMem = null; db.definirConfig({ wa_versao: null, wa_versao_em: 0 }); }
+      const espera = [300, 1000, 2000, 4000, 8000][Math.min(falhasSeguidas, 4)];
+      falhasSeguidas++;
+      setTimeout(() => { if (ativo()) iniciar().catch((e) => console.error('iniciar:', e.message)); }, espera);
     } else if (connection === 'open') {
-      statusConexao = 'conectado';
+      statusConexao = 'conectado'; falhasSeguidas = 0;
       try {
         const eu = sock.user || {};
         if (eu.lid && eu.id) lembrarLid(eu.lid, eu.id);
@@ -964,6 +1004,8 @@ let vigiaTimer = null;
 // Online: aparece online enquanto você está usando o Zap (igual WhatsApp Web) ou
 // enquanto houver contato com aviso de online — a menos que "esconder meu online" esteja ligado.
 // (Regra do WhatsApp: escondendo o seu, você também não vê o online dos outros.)
+const assinados = new Map();
+let assinadosDe = null;
 async function atualizarVigia() {
   clearTimeout(vigiaTimer);
   if (!socketAtual || statusConexao !== 'conectado') return;
@@ -974,9 +1016,21 @@ async function atualizarVigia() {
   try {
     await socketAtual.sendPresenceUpdate(disponivel ? 'available' : 'unavailable');
     if (disponivel) {
-      const alvos = new Set(db.conversasRecentes(150));
-      if (foco.jid && !foco.jid.endsWith('@g.us')) alvos.add(foco.jid);
-      for (const j of alvos) await socketAtual.presenceSubscribe(j).catch(() => {});
+      const sock = socketAtual;
+      if (assinadosDe !== sock) { assinadosDe = sock; assinados.clear(); }
+      const alvos = [];
+      // a conversa aberta primeiro, depois as mais recentes
+      if (foco.jid && !foco.jid.endsWith('@g.us')) alvos.push(foco.jid);
+      for (const j of db.conversasRecentes(120)) if (!j.endsWith('@g.us') && alvos.length < 80) alvos.push(j);
+      const agora = Date.now();
+      let n = 0;
+      for (const j of alvos) {
+        if (agora - (assinados.get(j) || 0) < 10 * 60 * 1000) continue;   // já assinado há pouco
+        if (socketAtual !== sock) break;
+        assinados.set(j, agora);
+        await sock.presenceSubscribe(j).catch(() => {});
+        if (++n % 12 === 0) await new Promise((r) => setTimeout(r, 250));   // em levas, sem enxurrada
+      }
     }
   } catch (_) {}
   if (appVisivel()) vigiaTimer = setTimeout(atualizarVigia, 2 * 60 * 1000);
@@ -993,9 +1047,26 @@ function conversaLida(jid) {
   if (c && c.nao_lidas) { db.marcarLidas(jid); emitir({ tipo: 'conversas' }); }
   emitir({ tipo: 'limpar_notificacao', jid });
 }
+let conferindoConexao = false;
+async function conferirConexao() {
+  const sock = socketAtual;
+  if (!sock || statusConexao !== 'conectado' || conferindoConexao) return;
+  conferindoConexao = true;
+  try {
+    await sock.query({ tag: 'iq', attrs: { id: sock.generateMessageTag(), to: 's.whatsapp.net', type: 'get', xmlns: 'w:p' }, content: [{ tag: 'ping', attrs: {} }] }, 4000);
+  } catch (e) {
+    if (socketAtual === sock && statusConexao === 'conectado') {
+      console.log('[conexão] não respondeu ao voltar pro app — reconectando já');
+      try { sock.end(new Error('Connection Lost')); } catch (_) {}
+    }
+  } finally { conferindoConexao = false; }
+}
 function definirFoco(visivel, jid) {
+  const voltou = !!visivel && !appVisivel();
+  if (voltou) conferirConexao();
   const mudou = visivel !== foco.visivel || jid !== foco.jid;
   foco = { visivel: !!visivel, jid: jid || null, em: Date.now() };
+  if (!visivel) { try { db.salvarAgora(); } catch (e) {} }      // app saiu da frente: garante tudo gravado no disco
   if (foco.jid && visivel) conversaLida(foco.jid);
   if (mudou) atualizarVigia();
   clearTimeout(focoTimer);

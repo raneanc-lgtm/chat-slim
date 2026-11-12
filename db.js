@@ -11,7 +11,6 @@
 // ============================================================
 
 const low = require('lowdb');
-const FileSync = require('lowdb/adapters/FileSync');
 const path = require('path');
 const fs = require('fs');
 
@@ -26,8 +25,121 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const MIDIA_DIR = path.join(DATA_DIR, 'midia');
 if (!fs.existsSync(MIDIA_DIR)) fs.mkdirSync(MIDIA_DIR, { recursive: true });
 
-const adapter = new FileSync(path.join(DATA_DIR, 'chatslim.json'));
+// ---- Gravação leve ----
+// Antes: cada alteração regravava o arquivo INTEIRO (dezenas de MB) na hora, travando o motor.
+// Agora: as mensagens ficam num arquivo pequeno por conversa (só a conversa que mudou é
+// regravada) e todo o resto vai num arquivo enxuto. As gravações são juntadas e feitas em lote
+// (pouco depois da última alteração, no máximo a cada 4 s). Tudo continua na memória como antes.
+const ARQ_PRINCIPAL = path.join(DATA_DIR, 'chatslim.json');
+const MSGS_DIR = path.join(DATA_DIR, 'msgs');
+const arqDaConversa = (jid) => path.join(MSGS_DIR, encodeURIComponent(String(jid)) + '.json');
+const sujas = new Set();            // conversas com mensagens alteradas desde a última gravação
+let principalSujo = false;
+let timerGravar = null, sujoDesde = 0, houveEscrita = false;
+let estado = null;
+
+function gravarAtomico(arq, texto) {
+  const tmp = arq + '.tmp';
+  fs.writeFileSync(tmp, texto);
+  fs.renameSync(tmp, arq);
+}
+function sujar(jid) { if (jid) { sujas.add(jid); agendarGravacao(); } }
+function agendarGravacao() {
+  houveEscrita = true;
+  if (!sujoDesde) sujoDesde = Date.now();
+  clearTimeout(timerGravar);
+  const espera = Date.now() - sujoDesde > 4000 ? 0 : 1200;
+  timerGravar = setTimeout(salvarAgora, espera);
+  if (timerGravar.unref) timerGravar.unref();
+}
+function salvarAgora() {
+  clearTimeout(timerGravar); timerGravar = null; sujoDesde = 0;
+  if (!estado) return;
+  try {
+    if (sujas.size) {
+      if (!fs.existsSync(MSGS_DIR)) fs.mkdirSync(MSGS_DIR, { recursive: true });
+      const grupos = new Map();
+      for (const jid of sujas) grupos.set(jid, []);
+      for (const m of estado.mensagens) { const g = grupos.get(m.conversa_jid); if (g) g.push(m); }
+      for (const [jid, lista] of grupos) {
+        if (lista.length) gravarAtomico(arqDaConversa(jid), JSON.stringify(lista));
+        else { try { fs.unlinkSync(arqDaConversa(jid)); } catch (_) {} }
+      }
+      sujas.clear();
+    }
+    if (principalSujo) {
+      const { mensagens, ...resto } = estado;
+      gravarAtomico(ARQ_PRINCIPAL, JSON.stringify(resto));
+      principalSujo = false;
+    }
+  } catch (e) { console.error('[banco] falha ao gravar:', e.message); agendarGravacao(); }
+}
+// rede de segurança: de minuto em minuto confere se alguma conversa ficou com contagem diferente da gravada
+const contagemGravada = new Map();
+function conferirContagens() {
+  if (!estado || !houveEscrita) return;
+  houveEscrita = false;
+  const agora = new Map();
+  for (const m of estado.mensagens) agora.set(m.conversa_jid, (agora.get(m.conversa_jid) || 0) + 1);
+  for (const [jid, n] of agora) if (contagemGravada.get(jid) !== n) sujas.add(jid);
+  for (const jid of contagemGravada.keys()) if (!agora.has(jid)) sujas.add(jid);
+  contagemGravada.clear(); for (const [jid, n] of agora) contagemGravada.set(jid, n);
+  if (sujas.size) agendarGravacao();
+}
+const timerConferir = setInterval(conferirContagens, 60000);
+if (timerConferir.unref) timerConferir.unref();
+process.on('exit', () => { try { salvarAgora(); } catch (_) {} });
+process.on('SIGTERM', () => { try { salvarAgora(); } catch (_) {} process.exit(0); });
+
+const adapter = {
+  read() {
+    let principal = {};
+    if (fs.existsSync(ARQ_PRINCIPAL)) {
+      try { principal = JSON.parse(fs.readFileSync(ARQ_PRINCIPAL, 'utf8')) || {}; }
+      catch (e) {
+        // arquivo corrompido (queda no meio de uma gravação antiga): guarda uma cópia e segue
+        try { fs.copyFileSync(ARQ_PRINCIPAL, ARQ_PRINCIPAL + '.corrompido'); } catch (_) {}
+        principal = {};
+      }
+    }
+    const mensagens = [];
+    const ids = new Set();
+    const temPasta = fs.existsSync(MSGS_DIR);
+    if (temPasta) {
+      for (const nome of fs.readdirSync(MSGS_DIR)) {
+        if (!nome.endsWith('.json')) continue;
+        try {
+          const lista = JSON.parse(fs.readFileSync(path.join(MSGS_DIR, nome), 'utf8'));
+          if (Array.isArray(lista)) for (const m of lista) { if (m && m.id && !ids.has(m.id)) { ids.add(m.id); mensagens.push(m); } }
+        } catch (_) {}
+      }
+    }
+    // formato antigo (mensagens dentro do arquivo principal) ou mensagens gravadas por uma versão
+    // antiga do motor: traz pra cá e marca as conversas pra gravar no formato novo
+    const antigas = Array.isArray(principal.mensagens) ? principal.mensagens : [];
+    if (antigas.length) {
+      if (!temPasta) { try { fs.copyFileSync(ARQ_PRINCIPAL, path.join(DATA_DIR, 'chatslim-antes-da-divisao.json')); } catch (_) {} }
+      for (const m of antigas) { if (m && m.id && !ids.has(m.id)) { ids.add(m.id); mensagens.push(m); sujas.add(m.conversa_jid); } }
+      principalSujo = true;
+    }
+    principal.mensagens = mensagens;
+    for (const m of mensagens) contagemGravada.set(m.conversa_jid, (contagemGravada.get(m.conversa_jid) || 0) + 1);
+    estado = principal;
+    if (principalSujo || sujas.size) agendarGravacao();
+    return principal;
+  },
+  write(novo) {
+    estado = novo;
+    principalSujo = true;
+    agendarGravacao();
+  },
+};
 const db = low(adapter);
+// a cópia de segurança da migração some sozinha depois de 14 dias
+try {
+  const bk = path.join(DATA_DIR, 'chatslim-antes-da-divisao.json');
+  if (fs.existsSync(bk) && Date.now() - fs.statSync(bk).mtimeMs > 14 * 86400000) fs.unlinkSync(bk);
+} catch (_) {}
 
 db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: [], status: [], vigiados: [], status_silenciados: [], chamadas: [], config: {} }).write();
 
@@ -37,7 +149,8 @@ db.defaults({ conversas: [], mensagens: [], presenca: [], contatos: [], lids: []
   const ruins = db.get('conversas').filter((c) => lixo(c.jid)).map('jid').value();
   if (ruins.length) {
     db.get('conversas').remove((c) => lixo(c.jid)).write();
-    db.get('mensagens').remove((m) => lixo(m.conversa_jid)).write();
+    ruins.forEach(sujar);
+    db.get('mensagens').remove((m) => lixo(m.conversa_jid)).value();
   }
 })();
 
@@ -79,7 +192,7 @@ function atualizarUltimaMensagem(jid, texto, timestamp, meta) {
 // Atualiza o status de entrega/leitura de uma mensagem minha (2=enviada, 3=entregue, 4/5=lida)
 function atualizarStatusMensagem(id, status) {
   const m = db.get('mensagens').find({ id }).value();
-  if (m && (m.status || 0) < status) db.get('mensagens').find({ id }).assign({ status }).write();
+  if (m && (m.status || 0) < status) { m.status = status; sujar(m.conversa_jid); }
   const c = db.get('conversas').find({ ultima_id: id }).value();
   if (c && (c.ultima_status || 0) < status) db.get('conversas').find({ jid: c.jid }).assign({ ultima_status: status }).write();
 }
@@ -159,10 +272,10 @@ function unificarLidsEmLote(pares) {
 function unificarLid(lid, pn) {
   if (!db.get('lids').find({ lid }).value()) db.get('lids').push({ lid, pn }).write();
   // mensagens
-  db.get('mensagens').filter({ conversa_jid: lid }).value()
-    .forEach((m) => db.get('mensagens').find({ id: m.id }).assign({ conversa_jid: pn }).write());
-  db.get('mensagens').filter({ remetente_jid: lid }).value()
-    .forEach((m) => db.get('mensagens').find({ id: m.id }).assign({ remetente_jid: pn }).write());
+  for (const m of db.get('mensagens').value()) {
+    if (m.conversa_jid === lid) { m.conversa_jid = pn; sujar(lid); sujar(pn); }
+    if (m.remetente_jid === lid) { m.remetente_jid = pn; sujar(m.conversa_jid); }
+  }
   // conversa
   const cl = db.get('conversas').find({ jid: lid }).value();
   if (cl) {
@@ -251,7 +364,8 @@ function apagarArquivoMidia(nome) {
 
 function apagarConversa(jid) {
   db.get('mensagens').filter({ conversa_jid: jid }).value().forEach((m) => apagarArquivoMidia(m.midia_path));
-  db.get('mensagens').remove({ conversa_jid: jid }).write();
+  db.get('mensagens').remove({ conversa_jid: jid }).value();
+  sujar(jid);
   db.get('conversas').remove({ jid }).write();
 }
 
@@ -327,7 +441,8 @@ function salvarMensagem(msg) {
       citada_autor: msg.citadaAutor || null,
       dados: msg.dados || null,
     })
-    .write();
+    .value();
+  sujar(msg.conversaJid);
 }
 // Reação (emoji) numa mensagem: guarda uma por pessoa; emoji vazio = tirou a reação
 function definirReacao(id, quem, emoji) {
@@ -335,12 +450,13 @@ function definirReacao(id, quem, emoji) {
   if (!m) return false;
   const reacoes = Object.assign({}, m.reacoes || {});
   if (emoji) reacoes[quem] = emoji; else delete reacoes[quem];
-  db.get('mensagens').find({ id }).assign({ reacoes }).write();
+  m.reacoes = reacoes; sujar(m.conversa_jid);
   return true;
 }
 
 function definirTranscricao(id, texto) {
-  db.get('mensagens').find({ id }).assign({ transcricao: texto }).write();
+  const m = db.get('mensagens').find({ id }).value();
+  if (m) { m.transcricao = texto; sujar(m.conversa_jid); }
 }
 
 function obterMensagem(id) {
@@ -348,7 +464,8 @@ function obterMensagem(id) {
 }
 
 function definirMidia(id, midiaPath, mimetype) {
-  db.get('mensagens').find({ id }).assign({ midia_path: midiaPath, midia_mimetype: mimetype, raw: null }).write();
+  const m = db.get('mensagens').find({ id }).value();
+  if (m) { m.midia_path = midiaPath; m.midia_mimetype = mimetype; m.raw = null; sujar(m.conversa_jid); }
 }
 
 function midiasDaConversa(jid, limite = 30) {
@@ -360,10 +477,8 @@ function midiasDaConversa(jid, limite = 30) {
 }
 
 function marcarComoApagada(id) {
-  db.get('mensagens')
-    .find({ id })
-    .assign({ apagada_pelo_remetente: 1, apagada_em: Date.now() })
-    .write();
+  const m = db.get('mensagens').find({ id }).value();
+  if (m) { m.apagada_pelo_remetente = 1; m.apagada_em = Date.now(); sujar(m.conversa_jid); }
 }
 
 function listarMensagens(conversaJid, limite = 300) {
@@ -447,6 +562,7 @@ function contarChamadasNovas() { return db.get('chamadas').filter((c) => !c.vist
 
 module.exports = {
   MIDIA_DIR,
+  salvarAgora,
   registrarChamada,
   listarChamadas,
   obterChamada,
