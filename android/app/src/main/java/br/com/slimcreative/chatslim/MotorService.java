@@ -27,11 +27,17 @@ public class MotorService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Embutido no Radinho: sem notificação própria. O motor fica ligado ao
-        // serviço do rádio (Integracao.ligarMotor), que já mantém o app vivo.
-        if (Config.embutido(this)) return START_STICKY;
+        boolean embutido = Config.embutido(this);
+        // Embutido no Radinho: só vira serviço em primeiro plano (notificação fixa) se o usuário
+        // ligou "Manter aberto em segundo plano". Sem isso, o Android congela o processo do motor
+        // em segundo plano e as mensagens chegam atrasadas; com isso, chegam na hora.
+        if (embutido && !Integracao.manter(this)) {
+            try { stopForeground(true); } catch (Throwable ignored) {}
+            return START_STICKY;
+        }
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel canal = new NotificationChannel(CANAL, "Conexão do WhatsApp (Chat Slim)", NotificationManager.IMPORTANCE_MIN);
+            NotificationChannel canal = new NotificationChannel(CANAL, "Conexão do Zap", NotificationManager.IMPORTANCE_MIN);
+            canal.setShowBadge(false);
             getSystemService(NotificationManager.class).createNotificationChannel(canal);
         }
         PendingIntent abrir = PendingIntent.getActivity(this, 0,
@@ -41,17 +47,19 @@ public class MotorService extends Service {
                 ? new Notification.Builder(this, CANAL)
                 : new Notification.Builder(this);
         Notification n = b.setSmallIcon(android.R.drawable.stat_notify_chat)
-                .setContentTitle("WhatsApp (Chat Slim)")
-                .setContentText("Conectado em segundo plano")
+                .setContentTitle(embutido ? "Zap ativo" : "WhatsApp (Chat Slim)")
+                .setContentText("Recebendo mensagens em segundo plano")
                 .setContentIntent(abrir)
                 .setOngoing(true)
                 .build();
 
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(7301, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        } else {
-            startForeground(7301, n);
-        }
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(7301, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(7301, n);
+            }
+        } catch (Throwable ignored) {}
         return START_STICKY;
     }
 

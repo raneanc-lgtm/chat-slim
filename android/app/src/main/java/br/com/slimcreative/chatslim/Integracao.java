@@ -134,8 +134,16 @@ public final class Integracao {
             @Override public void onServiceDisconnected(ComponentName n) {}
         };
         try {
-            ctx.getApplicationContext().bindService(new Intent(ctx, MotorService.class), conexao,
+            Context app = ctx.getApplicationContext();
+            app.bindService(new Intent(ctx, MotorService.class), conexao,
                     Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT);
+            // "Manter aberto em segundo plano" ligado: sobe o motor como serviço em primeiro plano,
+            // pra não ser congelado e receber as mensagens na hora.
+            if (manter(app)) {
+                Intent svc = new Intent(app, MotorService.class);
+                if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(svc);
+                else app.startService(svc);
+            }
         } catch (Throwable e) {
             conexao = null;
         }
@@ -169,6 +177,13 @@ public final class Integracao {
         @JavascriptInterface
         public void manterAberto(boolean ligar) {
             act.getSharedPreferences("zap", Context.MODE_PRIVATE).edit().putBoolean("manter_aberto", ligar).apply();
+            // aplica na hora: ligar sobe o motor como serviço em primeiro plano (recebe na hora);
+            // desligar faz o onStartCommand tirar a notificação fixa.
+            try {
+                Intent svc = new Intent(act, MotorService.class);
+                if (ligar && Build.VERSION.SDK_INT >= 26) act.startForegroundService(svc);
+                else act.startService(svc);
+            } catch (Throwable ignored) {}
         }
 
         @JavascriptInterface

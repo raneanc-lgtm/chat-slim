@@ -414,12 +414,16 @@ app.get('/api/eventos', (req, res) => {
   res.flushHeaders();
 
   const enviar = (evento) => {
-    res.write(`data: ${JSON.stringify(evento)}\n\n`);
+    try { res.write(`data: ${JSON.stringify(evento)}\n\n`); } catch (_) {}
   };
 
   const cancelar = motor.onEvento(enviar);
+  // batida a cada 20s: mantém o canal vivo e deixa a tela perceber se ele morreu calado
+  const batida = setInterval(() => enviar({ tipo: 'bat' }), 20000);
+  if (batida.unref) batida.unref();
 
   req.on('close', () => {
+    clearInterval(batida);
     cancelar();
   });
 });

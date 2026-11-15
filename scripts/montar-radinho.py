@@ -119,7 +119,10 @@ def main():
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize" android:theme="@android:style/Theme.Material.NoActionBar"/>
         <service android:name="br.com.slimcreative.chatslim.MotorService" android:exported="false"
-            android:process=":motor"/>
+            android:process=":motor" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBCATEGORY"
+                android:value="Cliente WhatsApp pareado: mantém a conexão para receber mensagens em segundo plano"/>
+        </service>
         <service android:name="br.com.slimcreative.chatslim.FechaJunto" android:exported="false"
             android:stopWithTask="false"/>
         <activity android:name="br.com.slimcreative.chatslim.AbrirZap" android:exported="false"
@@ -148,6 +151,9 @@ def main():
     perm = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
     if 'WRITE_EXTERNAL_STORAGE' not in m:
         m = m.replace('<application ', perm + '\n    <application ', 1)
+    # serviço em primeiro plano do motor (recebe mensagens em segundo plano quando "Manter aberto" está ligado)
+    if 'FOREGROUND_SERVICE_SPECIAL_USE' not in m:
+        m = m.replace('<application ', '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>\n    <application ', 1)
     # localização (anexo "Localização" do Zap)
     for pp in ('ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION'):
         if pp not in m:
