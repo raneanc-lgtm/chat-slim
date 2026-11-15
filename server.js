@@ -218,6 +218,36 @@ app.get('/api/interface/backups/:nome', (req, res) => {
   res.type('application/json').send(fs.readFileSync(path.join(BACKUP_DIR, n), 'utf8'));
 });
 
+// ---- Backup COMPLETO (histórico + interface), feito pra sobreviver a reinstalação ----
+// A tela manda o retrato da interface (arquivadas, fixadas, blocos, cores, papel de parede);
+// o Java leva o arquivo pro Downloads (via MediaStore); restaurar é pelo seletor de arquivo.
+app.post('/api/interface/retrato', (req, res) => {
+  try { db.guardarInterface((req.body || {}).dados); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.get('/api/backup/arquivo', (req, res) => {
+  try { res.type('application/json').send(JSON.stringify(db.exportarTudo())); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.post('/api/backup/importar', (req, res) => {
+  try {
+    const b = req.body || {};
+    const obj = b && b.tipo === 'radinho-backup-completo' ? b : (b && b.dados && b.dados.tipo ? b.dados : null);
+    if (!obj) return res.status(400).json({ erro: 'arquivo não é um backup completo do Radinho' });
+    const resumo = db.importarTudo(obj);
+    db.definirConfig({ restaurado_em: Date.now() });
+    res.json({ ok: true, resumo, interface: db.obterInterface() });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.get('/api/backup/info', (req, res) => {
+  try {
+    const cfg = db.obterConfig();
+    res.json({ conversas: db.listarConversas().length, tem_interface: !!db.obterInterface(), restaurado_em: cfg.restaurado_em || 0, backup_em: cfg.backup_em || 0 });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+// a tela avisa, depois de gravar no Downloads, pra guardar a data
+app.post('/api/backup/marcar', (req, res) => { try { db.definirConfig({ backup_em: Date.now() }); } catch (_) {} res.json({ ok: true }); });
+
 // Pedir a agenda completa ao WhatsApp
 app.post('/api/sincronizar-contatos', async (req, res) => {
   try {

@@ -155,7 +155,14 @@ public final class Integracao {
 
         @JavascriptInterface
         public int versao() {
-            return 5;
+            return 6;
+        }
+
+        /** Backup completo: grava o arquivo do motor em Downloads/Radinho (sobrevive à reinstalação). */
+        @JavascriptInterface
+        public String backupSalvar() {
+            try { return Backup.salvar(act, Config.endereco(act) + "/api/backup/arquivo"); }
+            catch (Throwable e) { return "erro: " + e.getMessage(); }
         }
 
         /** Configuração "Manter aberto em segundo plano": liga/desliga e consulta. */

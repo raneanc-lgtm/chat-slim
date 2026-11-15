@@ -560,9 +560,90 @@ function obterChamada(id) { return db.get('chamadas').find({ id: String(id) }).v
 function marcarChamadasVistas() { db.get('chamadas').filter({ vista: false }).each((c) => { if (c.status !== 'tocando') c.vista = true; }).value(); db.write(); }
 function contarChamadasNovas() { return db.get('chamadas').filter((c) => !c.vista && (c.status === 'perdida' || c.status === 'tocando')).size().value(); }
 
+// ---- Backup completo: exporta e importa TODO o banco (pra sobreviver a reinstalação) ----
+function exportarTudo() {
+  const e = estado || {};
+  return {
+    tipo: 'radinho-backup-completo',
+    versao: 1,
+    criado: Date.now(),
+    conversas: e.conversas || [],
+    mensagens: e.mensagens || [],
+    contatos: e.contatos || [],
+    lids: e.lids || [],
+    status: e.status || [],
+    vigiados: e.vigiados || [],
+    status_silenciados: e.status_silenciados || [],
+    chamadas: e.chamadas || [],
+    config: e.config || {},
+  };
+}
+
+// Junta o backup com o que já existe SEM apagar nada (o mais novo vence quando bate a chave).
+function importarTudo(obj) {
+  if (!obj || typeof obj !== 'object') throw new Error('backup inválido');
+  if (obj.tipo && obj.tipo !== 'radinho-backup-completo') throw new Error('arquivo não é um backup do Radinho');
+  const atual = estado || {};
+  const lista = (k) => (Array.isArray(obj[k]) ? obj[k] : []);
+  // junta duas listas por uma chave; "escolher" decide qual fica quando a chave repete
+  const juntar = (velha, nova, chave, escolher) => {
+    const mapa = new Map();
+    for (const it of velha || []) if (it && it[chave] != null) mapa.set(String(it[chave]), it);
+    for (const it of nova || []) {
+      if (!it || it[chave] == null) continue;
+      const k = String(it[chave]), ex = mapa.get(k);
+      mapa.set(k, ex && escolher ? escolher(ex, it) : (ex || it));
+    }
+    return [...mapa.values()];
+  };
+  const maisNova = (a, b) => ((b.timestamp || 0) > (a.timestamp || 0) ? b : a);
+  const novo = {
+    conversas: juntar(atual.conversas, lista('conversas'), 'jid', (a, b) => ((b.ultima_mensagem_ts || 0) > (a.ultima_mensagem_ts || 0) ? b : a)),
+    mensagens: juntar(atual.mensagens, lista('mensagens'), 'id', maisNova),
+    presenca: [],
+    contatos: juntar(atual.contatos, lista('contatos'), 'jid'),
+    lids: juntar(atual.lids, lista('lids'), 'lid'),
+    status: juntar(atual.status, lista('status'), 'id'),
+    vigiados: juntar(atual.vigiados, lista('vigiados'), 'jid'),
+    status_silenciados: juntar(atual.status_silenciados, lista('status_silenciados'), 'jid'),
+    chamadas: juntar(atual.chamadas, lista('chamadas'), 'id'),
+    // config: mantém o que já tem e completa com o que faltar do backup
+    config: { ...(obj.config || {}), ...(atual.config || {}) },
+  };
+  db.setState(novo);
+  estado = novo;
+  // marca TODAS as conversas pra regravar no formato novo (um arquivo por conversa)
+  sujas.clear();
+  for (const m of novo.mensagens) if (m && m.conversa_jid) sujas.add(m.conversa_jid);
+  principalSujo = true;
+  contagemGravada.clear();
+  salvarAgora();
+  return { conversas: novo.conversas.length, mensagens: novo.mensagens.length, contatos: novo.contatos.length };
+}
+
+// guarda/lê o retrato da interface (arquivadas, fixadas, blocos, cores, papel de parede) junto do backup
+function guardarInterface(blob) { if (blob && typeof blob === 'object') definirConfig({ interface_retrato: blob, interface_em: Date.now() }); }
+function obterInterface() { return obterConfig().interface_retrato || null; }
+
+// grava o backup completo num arquivo (o Java leva pro Downloads, que sobrevive à reinstalação)
+function gravarBackupCompleto(destino) {
+  const dir = path.dirname(destino);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+  const tmp = destino + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(exportarTudo()));
+  fs.renameSync(tmp, destino);
+  return { tamanho: fs.statSync(destino).size };
+}
+
 module.exports = {
   MIDIA_DIR,
+  DATA_DIR,
   salvarAgora,
+  exportarTudo,
+  importarTudo,
+  guardarInterface,
+  obterInterface,
+  gravarBackupCompleto,
   registrarChamada,
   listarChamadas,
   obterChamada,

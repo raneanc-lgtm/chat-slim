@@ -673,11 +673,10 @@ async function iniciar() {
     for (const x of [].concat(lista || [])) if (x && x.lid && x.pn) lembrarLid(x.lid, x.pn);
   });
 
-  // ---- Conversa apagada no celular → some daqui também ----
-  sock.ev.on('chats.delete', async (jids) => {
-    for (const j of jids || []) db.apagarConversa(await paraNumero(j));
-    emitir({ tipo: 'conversas' });
-  });
+  // ---- Conversa apagada no celular → Radinho é ARQUIVO PERMANENTE, NÃO apaga aqui ----
+  // (apagar no WhatsApp principal, limpar ou arquivar lá não some com o histórico guardado no Radinho;
+  //  quem quiser apagar aqui usa o botão de apagar dentro do próprio Radinho)
+  sock.ev.on('chats.delete', () => {});
 
   // ---- Exclusão de mensagens (protocol messages) ----
   sock.ev.on('messages.update', (updates) => {
