@@ -125,6 +125,13 @@ def main():
         </service>
         <service android:name="br.com.slimcreative.chatslim.FechaJunto" android:exported="false"
             android:stopWithTask="false"/>
+        <service android:name="br.com.slimcreative.chatslim.ZapEscuta" android:exported="true"
+            android:label="Zap (acordar pelo aviso do WhatsApp)"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
         <activity android:name="br.com.slimcreative.chatslim.AbrirZap" android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
         <meta-data android:name="chatslim.porta" android:value="{PORTA_EMBUTIDO}"/>

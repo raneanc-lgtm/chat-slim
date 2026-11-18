@@ -27,6 +27,29 @@ public final class Integracao {
     private Integracao() {}
 
     private static ServiceConnection conexao;
+    private static boolean registrado = false;
+    private static int telas = 0;              // quantas telas do app estão visíveis agora
+    private static boolean porAviso = false;   // o motor foi aberto pelo aviso do WhatsApp oficial (sem a tela)
+
+    static boolean telaAberta() { return telas > 0; }
+    static void marcarPorAviso() { if (conexao == null && telas == 0) porAviso = true; }
+    static boolean acordadoPorAviso() { return porAviso; }
+
+    /** Solta o motor (sem matar o app): usado quando o aviso acordou o motor e não tem mais nada acontecendo. */
+    static synchronized void soltarMotor(Context app) {
+        porAviso = false;
+        if (conexao != null) { try { app.unbindService(conexao); } catch (Throwable ignored) {} conexao = null; }
+        try { app.stopService(new Intent(app, MotorService.class)); } catch (Throwable ignored) {}
+        matarMotor(app);
+    }
+
+    /** "Acesso às notificações" liberado para o Radinho? */
+    static boolean escutaAtiva(Context c) {
+        try {
+            String l = android.provider.Settings.Secure.getString(c.getContentResolver(), "enabled_notification_listeners");
+            return l != null && l.contains(c.getPackageName() + "/");
+        } catch (Throwable e) { return false; }
+    }
 
     public static void instalar(Activity act, WebView web) {
         try {
@@ -35,7 +58,20 @@ public final class Integracao {
             web.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         } catch (Throwable ignored) {}
         // liga o motor já (ele roda em outro processo, não atrapalha a abertura da tela)
+        porAviso = false;
         ligarMotor(act.getApplicationContext());
+        if (!registrado) try {
+            registrado = true;
+            act.getApplication().registerActivityLifecycleCallbacks(new android.app.Application.ActivityLifecycleCallbacks() {
+                public void onActivityStarted(Activity a) { telas++; porAviso = false; ligarMotor(a.getApplicationContext()); }
+                public void onActivityStopped(Activity a) { telas = Math.max(0, telas - 1); if (telas == 0) ZapEscuta.telaFechou(a.getApplicationContext()); }
+                public void onActivityCreated(Activity a, Bundle b) {}
+                public void onActivityResumed(Activity a) {}
+                public void onActivityPaused(Activity a) {}
+                public void onActivitySaveInstanceState(Activity a, Bundle b) {}
+                public void onActivityDestroyed(Activity a) {}
+            });
+        } catch (Throwable ignored) {}
         // vigia o "arrastar da lista de apps": fecha tudo ou deixa rodando, conforme a escolha nas configurações
         try { act.startService(new Intent(act, FechaJunto.class)); } catch (Throwable ignored) {}
     }
@@ -163,7 +199,30 @@ public final class Integracao {
 
         @JavascriptInterface
         public int versao() {
-            return 6;
+            return 7;
+        }
+
+        /** Aviso do WhatsApp oficial acorda o Zap: está liberado o "Acesso às notificações"? */
+        @JavascriptInterface
+        public boolean escutaAtiva() { return Integracao.escutaAtiva(act); }
+
+        /** Abre a tela do Android onde se libera o "Acesso às notificações". */
+        @JavascriptInterface
+        public void abrirAcessoNotificacoes() {
+            act.runOnUiThread(() -> {
+                try { act.startActivity(new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
+                catch (Throwable e) {
+                    try { act.startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + act.getPackageName()))); } catch (Throwable ignored) {}
+                }
+            });
+        }
+
+        /** Abre "Informações do app" (onde o Android 13+ libera as "configurações restritas" de apps instalados fora da loja). */
+        @JavascriptInterface
+        public void abrirInfoApp() {
+            act.runOnUiThread(() -> {
+                try { act.startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + act.getPackageName()))); } catch (Throwable ignored) {}
+            });
         }
 
         /** Backup completo: grava o arquivo do motor em Downloads/Radinho (sobrevive à reinstalação). */
