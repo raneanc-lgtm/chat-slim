@@ -95,6 +95,7 @@ app.post('/api/conversas/:jid/mensagens', async (req, res) => {
 
 // Enviar mídia (foto, vídeo, áudio, documento, sticker)
 // Grava já o que estiver pendente (a tela chama ao minimizar/fechar o app)
+app.post('/api/acordar', (req, res) => { try { res.json(motor.acordar(String((req.body && req.body.origem) || req.query.origem || ''))); } catch (e) { res.json({ ok: false }); } });
 app.post('/api/salvar-agora', (req, res) => { try { db.salvarAgora(); } catch (_) {} res.json({ ok: true }); });
 
 // ---- Chamadas ----
@@ -435,5 +436,6 @@ app.listen(PORTA, '127.0.0.1', () => {
 });
 
 motor.iniciar().catch((err) => {
+  setTimeout(() => { try { motor.acordar('inicio'); } catch (_) {} }, 3000);
   console.error('Erro ao iniciar motor:', err);
 });

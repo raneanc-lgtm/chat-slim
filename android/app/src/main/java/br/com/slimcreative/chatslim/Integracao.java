@@ -29,19 +29,6 @@ public final class Integracao {
     private static ServiceConnection conexao;
     private static boolean registrado = false;
     private static int telas = 0;              // quantas telas do app estão visíveis agora
-    private static boolean porAviso = false;   // o motor foi aberto pelo aviso do WhatsApp oficial (sem a tela)
-
-    static boolean telaAberta() { return telas > 0; }
-    static void marcarPorAviso() { if (conexao == null && telas == 0) porAviso = true; }
-    static boolean acordadoPorAviso() { return porAviso; }
-
-    /** Solta o motor (sem matar o app): usado quando o aviso acordou o motor e não tem mais nada acontecendo. */
-    static synchronized void soltarMotor(Context app) {
-        porAviso = false;
-        if (conexao != null) { try { app.unbindService(conexao); } catch (Throwable ignored) {} conexao = null; }
-        try { app.stopService(new Intent(app, MotorService.class)); } catch (Throwable ignored) {}
-        matarMotor(app);
-    }
 
     /** "Acesso às notificações" liberado para o Radinho? */
     static boolean escutaAtiva(Context c) {
@@ -58,13 +45,12 @@ public final class Integracao {
             web.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         } catch (Throwable ignored) {}
         // liga o motor já (ele roda em outro processo, não atrapalha a abertura da tela)
-        porAviso = false;
         ligarMotor(act.getApplicationContext());
         if (!registrado) try {
             registrado = true;
             act.getApplication().registerActivityLifecycleCallbacks(new android.app.Application.ActivityLifecycleCallbacks() {
-                public void onActivityStarted(Activity a) { telas++; porAviso = false; ligarMotor(a.getApplicationContext()); }
-                public void onActivityStopped(Activity a) { telas = Math.max(0, telas - 1); if (telas == 0) ZapEscuta.telaFechou(a.getApplicationContext()); }
+                public void onActivityStarted(Activity a) { telas++; ligarMotor(a.getApplicationContext()); }
+                public void onActivityStopped(Activity a) { telas = Math.max(0, telas - 1); }
                 public void onActivityCreated(Activity a, Bundle b) {}
                 public void onActivityResumed(Activity a) {}
                 public void onActivityPaused(Activity a) {}

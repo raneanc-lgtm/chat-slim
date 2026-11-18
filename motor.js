@@ -514,7 +514,7 @@ async function resetarConexao(sairDaConta) {
   statusConexao = 'desconectado'; ultimoQR = null;
   emitir({ tipo: 'status', status: 'desconectado' });
   const g = geracao;
-  setTimeout(() => { if (g === geracao) iniciar().catch((e) => console.error('iniciar:', e.message)); }, 1200);
+  setTimeout(() => { if (g === geracao) iniciarSeguro(); }, 1200);
   return { ok: true };
 }
 
@@ -539,6 +539,7 @@ async function versaoDoWhatsApp() {
 }
 
 async function iniciar() {
+  ultimaTentativa = Date.now();
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const version = await versaoDoWhatsApp();
 
@@ -594,7 +595,7 @@ async function iniciar() {
       if (motivo === 405) { versaoMem = null; db.definirConfig({ wa_versao: null, wa_versao_em: 0 }); }
       const espera = [300, 1000, 2000, 4000, 8000][Math.min(falhasSeguidas, 4)];
       falhasSeguidas++;
-      setTimeout(() => { if (ativo()) iniciar().catch((e) => console.error('iniciar:', e.message)); }, espera);
+      setTimeout(() => { if (ativo()) iniciarSeguro(); }, espera);
     } else if (connection === 'open') {
       statusConexao = 'conectado'; falhasSeguidas = 0;
       try {
@@ -1046,6 +1047,45 @@ function conversaLida(jid) {
   if (c && c.nao_lidas) { db.marcarLidas(jid); emitir({ tipo: 'conversas' }); }
   emitir({ tipo: 'limpar_notificacao', jid });
 }
+// ---- Vigia da conexão: nunca deixa o motor preso em "conectando" ----
+let ultimaTentativa = Date.now();
+function iniciarSeguro() {
+  const g = geracao;
+  return iniciar().catch((e) => {
+    console.error('iniciar:', e && e.message);
+    // falhou antes de conectar (rede, arquivo...): tenta de novo sozinho
+    setTimeout(() => { if (g + 1 >= geracao) religarJa('falha ao iniciar'); }, 3000);
+  });
+}
+function religarJa(motivo) {
+  console.log('[conexão] religando: ' + motivo);
+  const velho = socketAtual;
+  geracao++;                                   // a conexão velha fica surda
+  if (velho) {
+    try { velho.ev.removeAllListeners('connection.update'); } catch (_) {}
+    try { velho.end(undefined); } catch (_) {}
+  }
+  statusConexao = 'desconectado';
+  emitir({ tipo: 'status', status: 'desconectado' });
+  return iniciarSeguro();
+}
+setInterval(() => {
+  if (statusConexao === 'conectado' || statusConexao === 'aguardando_qr') return;
+  if (Date.now() - ultimaTentativa > 30000) religarJa('preso sem conectar há mais de 30s');
+}, 10000);
+
+// Acordar: chamado quando o WhatsApp oficial do celular recebe uma mensagem (aviso) ou quando a tela
+// volta. Conectado → confere com um ping (morta = reconecta na hora e o WhatsApp entrega o que faltou).
+// Desconectado há um tempo → religa já, sem esperar o vigia.
+let ultimoAcordar = 0;
+function acordar(origem) {
+  const agora = Date.now();
+  if (statusConexao === 'conectado') { conferirConexao(); }
+  else if (statusConexao !== 'aguardando_qr' && agora - ultimaTentativa > 8000) religarJa('acordado (' + (origem || '?') + ')');
+  if (agora - ultimoAcordar > 3000) { ultimoAcordar = agora; emitir({ tipo: 'conversas' }); }
+  return { ok: true, status: statusConexao };
+}
+
 let conferindoConexao = false;
 async function conferirConexao() {
   const sock = socketAtual;
@@ -1062,7 +1102,7 @@ async function conferirConexao() {
 }
 function definirFoco(visivel, jid) {
   const voltou = !!visivel && !appVisivel();
-  if (voltou) conferirConexao();
+  if (voltou) acordar('tela');
   const mudou = visivel !== foco.visivel || jid !== foco.jid;
   foco = { visivel: !!visivel, jid: jid || null, em: Date.now() };
   if (!visivel) { try { db.salvarAgora(); } catch (e) {} }      // app saiu da frente: garante tudo gravado no disco
@@ -1419,6 +1459,7 @@ module.exports = {
   fotoDePerfil,
   definirVigia,
   definirFoco,
+  acordar,
   reaplicarOnline: () => atualizarVigia(),
   perfil,
   fotoHD,
