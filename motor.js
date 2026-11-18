@@ -558,7 +558,7 @@ async function iniciar() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     markOnlineOnConnect: false, // não força seu próprio status online ao conectar
-    keepAliveIntervalMs: 20000,  // percebe conexão morta mais rápido
+    keepAliveIntervalMs: 30000,  // 30s: menos idas ao rádio (economiza bateria); conexão morta é pega ao voltar pro app
     connectTimeoutMs: 15000,
     ...(desktop ? { browser: Browsers.macOS('Desktop'), syncFullHistory: true } : {}),
   });
