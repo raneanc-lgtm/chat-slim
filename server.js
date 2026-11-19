@@ -101,6 +101,7 @@ app.post('/api/salvar-agora', (req, res) => { try { db.salvarAgora(); } catch (_
 // ---- Chamadas ----
 app.get('/api/chamadas', (req, res) => res.json({ lista: db.listarChamadas(), novas: db.contarChamadasNovas() }));
 app.post('/api/chamadas/vistas', (req, res) => { db.marcarChamadasVistas(); res.json({ ok: true, novas: db.contarChamadasNovas() }); });
+app.post('/api/chamadas/:id/apagar', (req, res) => { try { res.json(db.apagarChamada(req.params.id)); } catch (e) { res.status(500).json({ erro: e.message }); } });
 app.post('/api/chamadas/:id/recusar', async (req, res) => {
   try { res.json(await motor.recusarChamada(decodeURIComponent(req.params.id))); }
   catch (err) { res.status(400).json({ erro: err.message }); }

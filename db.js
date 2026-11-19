@@ -543,7 +543,17 @@ function obterPresenca(jid) {
 }
 
 // ---- Chamadas (só o registro: a voz/vídeo acontece no WhatsApp oficial) ----
+function chamadasApagadas() { const l = (db.get('config').value() || {}).chamadas_apagadas; return Array.isArray(l) ? l : []; }
+function apagarChamada(id) {
+  id = String(id);
+  db.get('chamadas').remove({ id }).write();
+  // lembra que foi apagada: não volta por atualização da mesma chamada nem ao restaurar backup
+  const l = chamadasApagadas().filter((x) => x !== id); l.push(id);
+  db.set('config.chamadas_apagadas', l.slice(-500)).write();
+  return { ok: true };
+}
 function registrarChamada(c) {
+  if (chamadasApagadas().includes(String(c.id))) return c;
   const lista = db.get('chamadas');
   const ex = lista.find({ id: c.id }).value();
   if (ex) { lista.find({ id: c.id }).assign(c).write(); return lista.find({ id: c.id }).value(); }
@@ -606,9 +616,13 @@ function importarTudo(obj) {
     status: juntar(atual.status, lista('status'), 'id'),
     vigiados: juntar(atual.vigiados, lista('vigiados'), 'jid'),
     status_silenciados: juntar(atual.status_silenciados, lista('status_silenciados'), 'jid'),
-    chamadas: juntar(atual.chamadas, lista('chamadas'), 'id'),
+    chamadas: (() => {
+      const fora = new Set([...((atual.config || {}).chamadas_apagadas || []), ...(((obj.config || {}).chamadas_apagadas) || [])].map(String));
+      return juntar(atual.chamadas, lista('chamadas'), 'id').filter((c) => !fora.has(String(c.id)));
+    })(),
     // config: mantém o que já tem e completa com o que faltar do backup
-    config: { ...(obj.config || {}), ...(atual.config || {}) },
+    config: { ...(obj.config || {}), ...(atual.config || {}),
+      chamadas_apagadas: [...new Set([...(((obj.config || {}).chamadas_apagadas) || []), ...(((atual.config || {}).chamadas_apagadas) || [])])].slice(-500) },
   };
   db.setState(novo);
   estado = novo;
@@ -636,6 +650,7 @@ function gravarBackupCompleto(destino) {
 }
 
 module.exports = {
+  apagarChamada,
   MIDIA_DIR,
   DATA_DIR,
   salvarAgora,
