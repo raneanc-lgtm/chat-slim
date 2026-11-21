@@ -1058,6 +1058,8 @@ function iniciarSeguro() {
   });
 }
 function religarJa(motivo) {
+  if (religando) return;
+  religando = true; setTimeout(() => { religando = false; }, 5000);
   console.log('[conexão] religando: ' + motivo);
   const velho = socketAtual;
   geracao++;                                   // a conexão velha fica surda
@@ -1071,17 +1073,18 @@ function religarJa(motivo) {
 }
 setInterval(() => {
   if (statusConexao === 'conectado' || statusConexao === 'aguardando_qr') return;
-  if (Date.now() - ultimaTentativa > 30000) religarJa('preso sem conectar há mais de 30s');
+  if (Date.now() - ultimaTentativa > 40000) religarJa('preso sem conectar há mais de 40s');
 }, 10000);
 
 // Acordar: chamado quando o WhatsApp oficial do celular recebe uma mensagem (aviso) ou quando a tela
 // volta. Conectado → confere com um ping (morta = reconecta na hora e o WhatsApp entrega o que faltou).
 // Desconectado há um tempo → religa já, sem esperar o vigia.
-let ultimoAcordar = 0;
+let ultimoAcordar = 0, religando = false;
 function acordar(origem) {
   const agora = Date.now();
   if (statusConexao === 'conectado') { conferirConexao(); }
-  else if (statusConexao !== 'aguardando_qr' && agora - ultimaTentativa > 8000) religarJa('acordado (' + (origem || '?') + ')');
+  // só religa se a tentativa atual JÁ passou bem do tempo normal (rede lenta demora, e reiniciar no meio só atrasa)
+  else if (statusConexao !== 'aguardando_qr' && !religando && agora - ultimaTentativa > 25000) religarJa('acordado (' + (origem || '?') + ')');
   if (agora - ultimoAcordar > 3000) { ultimoAcordar = agora; emitir({ tipo: 'conversas' }); }
   return { ok: true, status: statusConexao };
 }
