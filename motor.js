@@ -497,14 +497,21 @@ async function processarStatus(m, tempoReal) {
 }
 
 let historicoCompleto = false;
+// diagnóstico mostrado na tela de conexão: por que está demorando
+const diag = { tentativas: 0, codigo: null, motivo: null, em: 0 };
+const NOMES_CODIGO = { 401: 'sessão encerrada no celular', 403: 'WhatsApp recusou a conexão', 405: 'versão recusada', 408: 'sem resposta da rede', 411: 'sessão incompatível', 428: 'conexão caiu', 440: 'WhatsApp aberto em outro lugar', 500: 'login corrompido', 503: 'WhatsApp indisponível', 515: 'reiniciando' };
 let geracao = 0, falhasDesktop = 0, falhasSeguidas = 0;
 const FLAG_WEB = path.join(BASE_DIR, 'modo-web.flag');
 
 // Começar do zero: sai da conta (se der), apaga só o login e sobe uma conexão nova
 // que mostra o código/QR. Conversas, contatos e fotos ficam.
+let resetando = false;
 async function resetarConexao(sairDaConta) {
+  if (resetando) return { ok: true, jaEmAndamento: true };
+  resetando = true; setTimeout(() => { resetando = false; }, 15000);
   const velho = socketAtual;
-  geracao++;                         // a conexão velha para de mandar qualquer coisa
+  geracao++;
+  falhasSeguidas = 0; diag.codigo = null; diag.motivo = 'novo código'; diag.tentativas = 0;                         // a conexão velha para de mandar qualquer coisa
   if (velho) {
     if (sairDaConta) { try { await Promise.race([velho.logout(), new Promise((r) => setTimeout(r, 6000))]); } catch (_) {} }
     try { velho.end(undefined); } catch (_) {}
@@ -514,7 +521,12 @@ async function resetarConexao(sairDaConta) {
   statusConexao = 'desconectado'; ultimoQR = null;
   emitir({ tipo: 'status', status: 'desconectado' });
   const g = geracao;
-  setTimeout(() => { if (g === geracao) iniciarSeguro(); }, 1200);
+  setTimeout(() => {
+    // o socket velho pode ter gravado arquivos de login depois da limpeza: limpa de novo antes de subir o novo
+    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+    resetando = false;
+    if (g === geracao) iniciarSeguro();
+  }, 1500);
   return { ok: true };
 }
 
@@ -540,7 +552,16 @@ async function versaoDoWhatsApp() {
 
 async function iniciar() {
   ultimaTentativa = Date.now();
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  diag.tentativas++; diag.em = Date.now();
+  let auth;
+  try { auth = await useMultiFileAuthState(AUTH_DIR); }
+  catch (e) {
+    // pasta de login quebrada: guarda de lado e começa limpo (histórico e conversas ficam)
+    console.error('[conexão] login ilegível, recomeçando:', e && e.message);
+    try { fs.renameSync(AUTH_DIR, AUTH_DIR + '.quebrado'); } catch (_) { try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (__) {} }
+    auth = await useMultiFileAuthState(AUTH_DIR);
+  }
+  const { state, saveCreds } = auth;
   const version = await versaoDoWhatsApp();
 
   // Histórico completo: o celular só manda TUDO (anos de conversas e contatos) na hora de
@@ -588,16 +609,22 @@ async function iniciar() {
         falhasDesktop = 0;
         return resetarConexao(false);
       }
+      diag.codigo = motivo || null; diag.motivo = NOMES_CODIGO[motivo] || (lastDisconnect?.error?.message || 'caiu'); diag.em = Date.now();
       if (motivo === DisconnectReason.loggedOut) return resetarConexao(false);
+      // login corrompido/incompatível duas vezes seguidas: não adianta insistir, zera o login e mostra o código novo
+      if ((motivo === 500 || motivo === 411) && !state.creds.registered) return resetarConexao(false);
+      if ((motivo === 500 || motivo === 411) && falhasSeguidas >= 2) return resetarConexao(false);
       statusConexao = 'desconectado';
       emitir({ tipo: 'status', status: 'desconectado' });
       // 405 = versão do WhatsApp recusada: esquece a guardada pra buscar outra
-      if (motivo === 405) { versaoMem = null; db.definirConfig({ wa_versao: null, wa_versao_em: 0 }); }
-      const espera = [300, 1000, 2000, 4000, 8000][Math.min(falhasSeguidas, 4)];
+      if (motivo === 405 || (falhasSeguidas > 0 && falhasSeguidas % 3 === 0)) { versaoMem = null; db.definirConfig({ wa_versao: null, wa_versao_em: 0 }); }
+      let espera = [300, 1000, 2000, 4000, 8000, 15000][Math.min(falhasSeguidas, 5)];
+      if (motivo === 440) espera = Math.max(espera, 20000);      // aberto em outro lugar: não brigar pela sessão
+      if (motivo === 403) espera = Math.max(espera, 30000);
       falhasSeguidas++;
       setTimeout(() => { if (ativo()) iniciarSeguro(); }, espera);
     } else if (connection === 'open') {
-      statusConexao = 'conectado'; falhasSeguidas = 0;
+      statusConexao = 'conectado'; falhasSeguidas = 0; diag.tentativas = 0; diag.codigo = null; diag.motivo = null;
       try {
         const eu = sock.user || {};
         if (eu.lid && eu.id) lembrarLid(eu.lid, eu.id);
@@ -1474,5 +1501,7 @@ module.exports = {
   enviosEmAndamento: () => envios,
   _processarMensagem: processarMensagem, // usado nos testes
   getStatus: () => statusConexao,
+  getDiag: () => ({ tentativas: diag.tentativas, codigo: diag.codigo, motivo: diag.motivo, seg: diag.em ? Math.round((Date.now() - diag.em) / 1000) : 0, falhas: falhasSeguidas }),
+  iniciarSeguro: () => iniciarSeguro(),
   getQR: () => ultimoQR,
 };

@@ -405,7 +405,7 @@ app.get('/api/status', async (req, res) => {
   if (qr) {
     qrImagem = await qrcode.toDataURL(qr);
   }
-  res.json({ status, qrImagem });
+  res.json({ status, qrImagem, diag: motor.getDiag ? motor.getDiag() : null });
 });
 
 // Server-Sent Events — atualizações em tempo real pro front
@@ -437,6 +437,6 @@ app.listen(PORTA, '127.0.0.1', () => {
 });
 
 motor.iniciar().catch((err) => {
-  setTimeout(() => { try { motor.acordar('inicio'); } catch (_) {} }, 3000);
+  setTimeout(() => { try { motor.iniciarSeguro(); } catch (_) {} }, 3000);
   console.error('Erro ao iniciar motor:', err);
 });
