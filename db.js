@@ -622,6 +622,9 @@ function importarTudo(obj) {
     })(),
     // config: mantém o que já tem e completa com o que faltar do backup
     config: { ...(obj.config || {}), ...(atual.config || {}),
+      // pastas/blocos, fixadas, cores...: na restauração o retrato do BACKUP vence (o do aparelho recém-instalado está vazio)
+      ...(((obj.config || {}).interface_retrato && Object.keys(obj.config.interface_retrato).length)
+        ? { interface_retrato: { ...((atual.config || {}).interface_retrato || {}), ...obj.config.interface_retrato }, interface_em: Date.now() } : {}),
       chamadas_apagadas: [...new Set([...(((obj.config || {}).chamadas_apagadas) || []), ...(((atual.config || {}).chamadas_apagadas) || [])])].slice(-500) },
   };
   db.setState(novo);
