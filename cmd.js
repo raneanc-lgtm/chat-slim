@@ -48,10 +48,26 @@ function criar({ db, motor, portaApp }) {
       res.json({ token: t });
     });
     a.use((req, res, next) => {
-      const t = req.headers['x-t'];
+      const t = req.headers['x-t'] || req.query.t;
       const ate = t && tokens.get(String(t));
       if (!ate || ate < Date.now()) { if (t) tokens.delete(String(t)); return res.status(401).json({ erro: 'sessao' }); }
       next();
+    });
+    // canal ao vivo: só avisa "mexeu na conversa X"; a página busca o texto por /m (nada de conteúdo passa por aqui)
+    a.get('/v', (req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+      const enviar = (o) => { try { res.write('data: ' + JSON.stringify(o) + '\n\n'); } catch (_) {} };
+      enviar({ ok: 1 });
+      const sair = motor.onEvento((ev) => {
+        if (!ev) return;
+        if (ev.tipo === 'mensagem_nova' || ev.tipo === 'mensagem_apagada' || ev.tipo === 'reacao') enviar({ j: ev.conversaJid || ev.jid || null });
+        else if (ev.tipo === 'conversas') enviar({ c: 1 });
+      });
+      const bat = setInterval(() => enviar({ b: 1 }), 15000);
+      req.on('close', () => { clearInterval(bat); sair(); });
     });
     a.get('/c', (req, res) => {
       const lista = db.listarConversas().slice(0, 60).map((c) => ({
@@ -152,7 +168,7 @@ function out(s,c){var d=document.createElement("div");if(c)d.className=c;d.textC
 function banner(){out("Microsoft Windows [Version 10.0.19045.3693]");out("(c) Microsoft Corporation. Todos os direitos reservados.");out("")}
 function prompt_(){if(modo==="senha"){p.textContent="Senha: ";i.type="password"}else{i.type="text";p.textContent=atual?RAIZ+"\\"+sem(atual.n).replace(/[\\\/:*?"<>|]/g,"")+">":RAIZ+">"}}
 function api(m,u,b){return fetch(u,{method:m,headers:{"Content-Type":"application/json","X-T":tok||""},body:b?JSON.stringify(b):undefined}).then(function(r){if(r.status===401&&tok){sair()}return r.json().then(function(j){if(!r.ok)throw new Error(j.erro||r.status);return j})})}
-function sair(){tok=null;try{sessionStorage.removeItem("t")}catch(e){}modo="senha";atual=null;parar();out("Sessao encerrada.","d");prompt_()}
+function sair(){tok=null;if(es){try{es.close()}catch(e){}es=null}try{sessionStorage.removeItem("t")}catch(e){}modo="senha";atual=null;parar();out("Sessao encerrada.","d");prompt_()}
 function pad(s,n){s=String(s);return s.length>=n?s.slice(0,n):s+new Array(n-s.length+1).join(" ")}
 function hhmm(ts){var d=new Date(ts);return("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)}
 function dia(ts){var d=new Date(ts),h=new Date();return d.toDateString()===h.toDateString()?hhmm(ts):("0"+d.getDate()).slice(-2)+"/"+("0"+(d.getMonth()+1)).slice(-2)}
@@ -161,13 +177,20 @@ function dir(){carregar().then(function(r){out("");out(" Pasta de "+RAIZ);out(""
 function linha(m){var q=m.m?"eu":sem(m.a||(atual?atual.n:"?"));return"["+m.h+"] "+q+"> "+sem(m.x)}
 function trazer(){if(!atual)return;var j=atual.j;api("GET","/m?jid="+encodeURIComponent(j)).then(function(r){if(!atual||atual.j!==j)return;r.msgs.forEach(function(m){if(vistos[m.id])return;vistos[m.id]=1;out(linha(m),m.m?"d":"")})}).catch(function(){})}
 function abrir(arg){var c=null,n=parseInt(arg,10);if(n&&lista[n-1])c=lista[n-1];else{var q=arg.toLowerCase();for(var k=0;k<lista.length;k++)if(sem(lista[k].n).toLowerCase().indexOf(q)>=0){c=lista[k];break}}
-if(!c){out("O sistema nao pode encontrar o caminho especificado.");return}atual=c;vistos={};out("");trazer();prompt_();parar();timer=setInterval(function(){if(!document.hidden)trazer()},2500)}
+if(!c){out("O sistema nao pode encontrar o caminho especificado.");return}atual=c;vistos={};out("");trazer();prompt_();parar();timer=setInterval(function(){if(!document.hidden)trazer()},4000)}
 function parar(){if(timer){clearInterval(timer);timer=null}}
+var es=null,tFeed=0,tList=0;
+function ouvir(){if(es||!tok)return;try{es=new EventSource("/v?t="+encodeURIComponent(tok))}catch(e){return}
+es.onmessage=function(ev){var d={};try{d=JSON.parse(ev.data)}catch(e){return}
+if(d.j&&atual&&atual.j===d.j){clearTimeout(tFeed);tFeed=setTimeout(trazer,120)}
+else if(d.j||d.c){clearTimeout(tList);tList=setTimeout(vigiar,600)}};
+es.onerror=function(){if(!tok){try{es.close()}catch(e){}es=null}}}
+document.addEventListener("visibilitychange",function(){if(!document.hidden){trazer();vigiar()}});
 function voltar(){parar();atual=null;prompt_()}
 function ajuda(){out("Comandos:");out("  dir            lista as pastas (conversas)");out("  N              (so o numero) abre a pasta");out("  cd ..          volta");out("  cls | Esc      limpa a tela");out("  texto          (dentro da pasta) envia");out("  > texto        envia mesmo que seja um comando");out("  exit           encerra a sessao")}
-function enviar(x){var j=atual.j;api("POST","/e",{jid:j,texto:x}).then(function(){setTimeout(trazer,700)}).catch(function(e){out("Falha ao gravar: "+e.message)})}
+function enviar(x){var j=atual.j;api("POST","/e",{jid:j,texto:x}).then(function(){setTimeout(trazer,150);setTimeout(trazer,900)}).catch(function(e){out("Falha ao gravar: "+e.message)})}
 function executar(s){var low=s.toLowerCase().trim();
-if(modo==="senha"){out("Senha: ******");fetch("/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({senha:s})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(r.status);return j})}).then(function(j){tok=j.token;try{sessionStorage.setItem("t",tok)}catch(e){}modo="dir";o.innerHTML="";banner();prompt_();dir()}).catch(function(){out("Acesso negado.")});return}
+if(modo==="senha"){out("Senha: ******");fetch("/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({senha:s})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(r.status);return j})}).then(function(j){tok=j.token;try{sessionStorage.setItem("t",tok)}catch(e){}modo="dir";o.innerHTML="";banner();prompt_();ouvir();dir()}).catch(function(){out("Acesso negado.")});return}
 out(p.textContent+s);if(!s.trim())return;
 if(s.charAt(0)===">"){var x=s.slice(1).trim();if(atual&&x)enviar(x);else out("Nao ha pasta aberta.");return}
 if(low==="cls"||low==="clear"){o.innerHTML="";return}
@@ -187,7 +210,7 @@ else if(e.key==="ArrowUp"&&modo!=="senha"){if(hp>0){hp--;i.value=hist[hp];e.prev
 else if(e.key==="ArrowDown"&&modo!=="senha"){if(hp<hist.length){hp++;i.value=hist[hp]||"";e.preventDefault()}}});
 document.addEventListener("keydown",function(e){if(e.key==="Escape"){o.innerHTML="";i.value=""}});
 t.addEventListener("click",function(){if(!getSelection().toString())i.focus()});
-banner();prompt_();if(tok){carregar().then(function(r){r.lista.forEach(function(c){ultTs[c.j]=c.ts});dir()}).catch(function(){})}i.focus();
+banner();prompt_();if(tok){ouvir();carregar().then(function(r){r.lista.forEach(function(c){ultTs[c.j]=c.ts});dir()}).catch(function(){})}i.focus();
 })();
 </script></body></html>
 `;
