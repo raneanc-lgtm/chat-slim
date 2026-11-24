@@ -17,6 +17,15 @@ function criar({ db, motor, portaApp }) {
 
   const cfg = () => db.obterConfig();
   const senhaAtual = () => SENHA_FIXA;
+  // só as conversas marcadas no perfil da pessoa aparecem no cmd
+  const jids = () => (Array.isArray(cfg().cmd_jids) ? cfg().cmd_jids : []);
+  const liberado = (j) => jids().includes(String(j));
+  function marcar(jid, ativo) {
+    const set = new Set(jids()); jid = String(jid);
+    if (ativo) set.add(jid); else set.delete(jid);
+    db.definirConfig({ cmd_jids: [...set] });
+    return [...set];
+  }
   const igual = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
   const ROTULO = { imagem: 'imagem', video: 'video', audio: 'audio', documento: 'arquivo', sticker: 'figura', localizacao: 'local', contato: 'contato', enquete: 'enquete', evento: 'evento' };
@@ -63,14 +72,14 @@ function criar({ db, motor, portaApp }) {
       enviar({ ok: 1 });
       const sair = motor.onEvento((ev) => {
         if (!ev) return;
-        if (ev.tipo === 'mensagem_nova' || ev.tipo === 'mensagem_apagada' || ev.tipo === 'reacao') enviar({ j: ev.conversaJid || ev.jid || null });
+        if (ev.tipo === 'mensagem_nova' || ev.tipo === 'mensagem_apagada' || ev.tipo === 'reacao') { const j = ev.conversaJid || ev.jid || null; if (j && liberado(j)) enviar({ j }); }
         else if (ev.tipo === 'conversas') enviar({ c: 1 });
       });
       const bat = setInterval(() => enviar({ b: 1 }), 15000);
       req.on('close', () => { clearInterval(bat); sair(); });
     });
     a.get('/c', (req, res) => {
-      const lista = db.listarConversas().slice(0, 60).map((c) => ({
+      const lista = db.listarConversas().filter((c) => liberado(c.jid)).slice(0, 60).map((c) => ({
         j: c.jid, n: c.nome_exibicao || c.jid.split('@')[0], nl: c.nao_lidas || 0,
         t: String(c.ultima_mensagem_texto || '').slice(0, 80), ts: c.ultima_mensagem_ts || 0,
         g: c.eh_grupo ? 1 : 0, m: c.ultima_de_mim ? 1 : 0,
@@ -79,7 +88,7 @@ function criar({ db, motor, portaApp }) {
     });
     a.get('/m', (req, res) => {
       const jid = String(req.query.jid || '');
-      if (!jid) return res.status(400).json({ erro: 'jid' });
+      if (!jid || !liberado(jid)) return res.status(403).json({ erro: 'jid' });
       const grupo = jid.endsWith('@g.us');
       const msgs = db.listarMensagens(jid, 40).map((m) => ({
         id: m.id, m: m.de_mim ? 1 : 0, ts: m.timestamp,
@@ -91,7 +100,7 @@ function criar({ db, motor, portaApp }) {
     a.post('/e', async (req, res) => {
       try {
         const jid = String((req.body && req.body.jid) || ''), tx = String((req.body && req.body.texto) || '').trim();
-        if (!jid || !tx) return res.status(400).json({ erro: 'vazio' });
+        if (!jid || !tx || !liberado(jid)) return res.status(400).json({ erro: 'vazio' });
         await motor.enviarMensagem(jid, tx.slice(0, 4000), null);
         res.json({ ok: true });
       } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -144,7 +153,7 @@ function criar({ db, motor, portaApp }) {
   // religa sozinho se estava ligado quando o motor reiniciou
   function iniciar() { if (cfg().cmd_ativo) ligar().catch((e) => console.error('[cmd] não subiu:', e.message)); }
 
-  return { estado, definir, iniciar, _app: app };
+  return { estado, definir, iniciar, jids, marcar, _app: app };
 }
 
 const PAGINA = String.raw`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -161,6 +170,8 @@ html,body{margin:0;height:100%;background:#0c0c0c;color:#ccc;font:15px/1.25 Cons
 (function(){
 var o=document.getElementById("o"),p=document.getElementById("p"),i=document.getElementById("i"),t=document.getElementById("t");
 var tok=null;try{tok=sessionStorage.getItem("t")}catch(e){}
+var novos={};try{novos=JSON.parse(sessionStorage.getItem("n")||"{}")}catch(e){}
+function salvaN(){try{sessionStorage.setItem("n",JSON.stringify(novos))}catch(e){}}
 var modo=tok?"dir":"senha",lista=[],atual=null,vistos={},timer=null,ultTs={},hist=[],hp=0;
 var RAIZ="C:\\Users\\Admin";
 function sem(s){return String(s==null?"":s).replace(/[\p{Extended_Pictographic}\u200d\ufe0f\u20e3\u{1F3FB}-\u{1F3FF}\u{1F1E6}-\u{1F1FF}]/gu,"").replace(/[ \t]{2,}/g," ").trim()}
@@ -173,11 +184,12 @@ function pad(s,n){s=String(s);return s.length>=n?s.slice(0,n):s+new Array(n-s.le
 function hhmm(ts){var d=new Date(ts);return("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)}
 function dia(ts){var d=new Date(ts),h=new Date();return d.toDateString()===h.toDateString()?hhmm(ts):("0"+d.getDate()).slice(-2)+"/"+("0"+(d.getMonth()+1)).slice(-2)}
 function carregar(){return api("GET","/c").then(function(r){lista=r.lista;return r})}
-function dir(){carregar().then(function(r){out("");out(" Pasta de "+RAIZ);out("");if(!lista.length)out("Nenhum arquivo encontrado.");lista.forEach(function(c,k){out(pad(k+1,3)+pad(c.nl?"<"+c.nl+">":"",6)+pad(sem(c.n),24)+" "+pad(dia(c.ts),6)+" "+(c.m?"> ":"")+sem(c.t).replace(/\s+/g," ").slice(0,40))});out("");if(r.status!=="conectado")out("(rede: "+r.status+")","d")}).catch(function(e){out("Erro: "+e.message)})}
+var jaDir=0;
+function dir(){carregar().then(function(r){if(!jaDir){jaDir=1;lista.forEach(function(c){if(c.nl)novos[c.j]=1});salvaN()}out("");out(" Pasta de "+RAIZ);out("");if(!lista.length)out("Nenhum arquivo encontrado.");lista.forEach(function(c,k){out((novos[c.j]?"\u25cf ":"  ")+pad(k+1,3)+pad(c.nl?"<"+c.nl+">":"",6)+pad(sem(c.n),24)+" "+pad(dia(c.ts),6)+" "+(c.m?"> ":"")+sem(c.t).replace(/\s+/g," ").slice(0,40))});out("");if(r.status!=="conectado")out("(rede: "+r.status+")","d")}).catch(function(e){out("Erro: "+e.message)})}
 function linha(m){var q=m.m?"eu":sem(m.a||(atual?atual.n:"?"));return"["+m.h+"] "+q+"> "+sem(m.x)}
 function trazer(){if(!atual)return;var j=atual.j;api("GET","/m?jid="+encodeURIComponent(j)).then(function(r){if(!atual||atual.j!==j)return;r.msgs.forEach(function(m){if(vistos[m.id])return;vistos[m.id]=1;out(linha(m),m.m?"d":"")})}).catch(function(){})}
 function abrir(arg){var c=null,n=parseInt(arg,10);if(n&&lista[n-1])c=lista[n-1];else{var q=arg.toLowerCase();for(var k=0;k<lista.length;k++)if(sem(lista[k].n).toLowerCase().indexOf(q)>=0){c=lista[k];break}}
-if(!c){out("O sistema nao pode encontrar o caminho especificado.");return}atual=c;vistos={};out("");trazer();prompt_();parar();timer=setInterval(function(){if(!document.hidden)trazer()},4000)}
+if(!c){out("O sistema nao pode encontrar o caminho especificado.");return}atual=c;delete novos[c.j];salvaN();vistos={};out("");trazer();prompt_();parar();timer=setInterval(function(){if(!document.hidden)trazer()},4000)}
 function parar(){if(timer){clearInterval(timer);timer=null}}
 var es=null,tFeed=0,tList=0;
 function ouvir(){if(es||!tok)return;try{es=new EventSource("/v?t="+encodeURIComponent(tok))}catch(e){return}
@@ -203,14 +215,14 @@ var m=/^(cd|open|abrir)\s+(.+)$/i.exec(s.trim());
 if(m){var go=function(){abrir(m[2].trim())};if(atual)voltar();if(!lista.length)carregar().then(go).catch(function(e){out("Erro: "+e.message)});else go();return}
 if(atual){enviar(s.trim());return}
 out('"'+s.trim().split(" ")[0]+'" nao e reconhecido como um comando interno ou externo,');out("programa operavel ou arquivo em lotes.")}
-function vigiar(){if(modo==="senha"||document.hidden)return;carregar().then(function(r){r.lista.forEach(function(c){var a=ultTs[c.j];if(a&&c.ts>a&&!c.m&&(!atual||atual.j!==c.j))out("[+] "+sem(c.n),"d");ultTs[c.j]=c.ts})}).catch(function(){})}
+function vigiar(){if(modo==="senha"||document.hidden)return;carregar().then(function(r){r.lista.forEach(function(c){var a=ultTs[c.j];if(a&&c.ts>a&&!c.m&&(!atual||atual.j!==c.j)){novos[c.j]=1;salvaN();out("[+] "+sem(c.n),"d")}ultTs[c.j]=c.ts})}).catch(function(){})}
 setInterval(vigiar,8000);
 i.addEventListener("keydown",function(e){if(e.key==="Enter"){var s=i.value;if(modo!=="senha"&&s.trim()){hist.push(s);hp=hist.length}i.value="";executar(s)}
 else if(e.key==="ArrowUp"&&modo!=="senha"){if(hp>0){hp--;i.value=hist[hp];e.preventDefault()}}
 else if(e.key==="ArrowDown"&&modo!=="senha"){if(hp<hist.length){hp++;i.value=hist[hp]||"";e.preventDefault()}}});
 document.addEventListener("keydown",function(e){if(e.key==="Escape"){o.innerHTML="";i.value=""}});
 t.addEventListener("click",function(){if(!getSelection().toString())i.focus()});
-banner();prompt_();if(tok){ouvir();carregar().then(function(r){r.lista.forEach(function(c){ultTs[c.j]=c.ts});dir()}).catch(function(){})}i.focus();
+banner();prompt_();if(tok){ouvir();carregar().then(function(r){r.lista.forEach(function(c){ultTs[c.j]=c.ts;if(c.nl)novos[c.j]=1});salvaN();dir()}).catch(function(){})}i.focus();
 })();
 </script></body></html>
 `;

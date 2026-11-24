@@ -399,6 +399,8 @@ app.post('/api/pareamento', async (req, res) => {
 });
 
 // Modo "cmd" (usar o Zap no PC, em texto): ligar/desligar e ver endereço + senha
+app.get('/api/cmd/jids', (req, res) => res.json({ jids: cmd.jids() }));
+app.post('/api/cmd/jids', (req, res) => { const b = req.body || {}; if (!b.jid) return res.status(400).json({ erro: 'jid' }); res.json({ jids: cmd.marcar(b.jid, !!b.ativo) }); });
 app.get('/api/cmd', async (req, res) => { try { res.json(await cmd.estado()); } catch (e) { res.status(500).json({ erro: e.message }); } });
 app.post('/api/cmd', async (req, res) => {
   try { res.json(await cmd.definir({ ativo: req.body && typeof req.body.ativo === 'boolean' ? req.body.ativo : undefined, novaSenha: !!(req.body && req.body.novaSenha) })); }
