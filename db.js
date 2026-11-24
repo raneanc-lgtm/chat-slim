@@ -321,17 +321,29 @@ function definirVigiado(jid, ligar) {
 // ---- Contatos pra iniciar conversa ----
 // Junta os contatos salvos pelo número e os que vieram só com o código interno (@lid),
 // sem repetir a mesma pessoa.
+// Contatos "excluídos": somem da lista do Zap (não mexe na agenda do celular nem no WhatsApp)
+function contatosOcultos() { const l = (db.get('config').value() || {}).contatos_ocultos; return Array.isArray(l) ? l : []; }
+function ocultarContato(jid, ocultar = true) {
+  jid = String(jid || ''); if (!jid) return contatosOcultos();
+  const set = new Set(contatosOcultos());
+  const ids = [jid];
+  for (const x of db.get('lids').value()) { if (x.pn === jid) ids.push(x.lid); if (x.lid === jid) ids.push(x.pn); }
+  ids.filter(Boolean).forEach((i) => (ocultar ? set.add(i) : set.delete(i)));
+  db.set('config.contatos_ocultos', [...set]).write();
+  return [...set];
+}
 function listarContatos() {
+  const ocultos = new Set(contatosOcultos());
   const lids = {};
   db.get('lids').value().forEach((x) => { lids[x.lid] = x.pn; });
   const porJid = {};
   for (const c of db.get('contatos').value()) {
-    if (!c.jid || c.jid.endsWith('@g.us')) continue;
+    if (!c.jid || c.jid.endsWith('@g.us') || ocultos.has(c.jid)) continue;
     const nome = c.nome_agenda || c.nome_perfil || c.nome;
     if (!nome) continue;
     let jid = c.jid;
     if (jid.endsWith('@lid') && lids[jid]) jid = lids[jid];
-    if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) continue;
+    if ((!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) || ocultos.has(jid)) continue;
     const atual = porJid[jid];
     const agenda = !!c.nome_agenda;
     if (!atual || (agenda && !atual.agenda)) {
@@ -341,7 +353,7 @@ function listarContatos() {
   // quem você já conversou, mesmo sem nome salvo, também entra (aparece pelo número)
   for (const cv of db.get('conversas').value()) {
     const jid = cv.jid || '';
-    if (!jid.endsWith('@s.whatsapp.net') || porJid[jid]) continue;
+    if (!jid.endsWith('@s.whatsapp.net') || porJid[jid] || ocultos.has(jid)) continue;
     porJid[jid] = { jid, nome: cv.nome || formatarNumero(jid), agenda: false, semNome: !cv.nome, numero: formatarNumero(jid) };
   }
   return Object.values(porJid).sort((a, b) => (b.agenda - a.agenda) || ((a.semNome ? 1 : 0) - (b.semNome ? 1 : 0)) || a.nome.localeCompare(b.nome, 'pt-BR'));
@@ -625,6 +637,7 @@ function importarTudo(obj) {
       // pastas/blocos, fixadas, cores...: na restauração o retrato do BACKUP vence (o do aparelho recém-instalado está vazio)
       ...(((obj.config || {}).interface_retrato && Object.keys(obj.config.interface_retrato).length)
         ? { interface_retrato: { ...((atual.config || {}).interface_retrato || {}), ...obj.config.interface_retrato }, interface_em: Date.now() } : {}),
+      contatos_ocultos: [...new Set([...(((obj.config || {}).contatos_ocultos) || []), ...(((atual.config || {}).contatos_ocultos) || [])])],
       chamadas_apagadas: [...new Set([...(((obj.config || {}).chamadas_apagadas) || []), ...(((atual.config || {}).chamadas_apagadas) || [])])].slice(-500) },
   };
   db.setState(novo);
@@ -653,6 +666,7 @@ function gravarBackupCompleto(destino) {
 }
 
 module.exports = {
+  ocultarContato, contatosOcultos,
   apagarChamada,
   MIDIA_DIR,
   DATA_DIR,

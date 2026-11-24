@@ -170,6 +170,12 @@ app.get('/api/contatos', (req, res) => {
   res.json(db.listarContatos());
 });
 
+// Excluir contato da lista do Zap (só aqui; não apaga conversa nem mexe na agenda do celular)
+app.post('/api/contatos/excluir', (req, res) => {
+  const b = req.body || {}; if (!b.jid) return res.status(400).json({ erro: 'jid' });
+  db.ocultarContato(b.jid, b.restaurar ? false : true); res.json({ ok: true });
+});
+
 // Recuperar o máximo de contatos e gerar o arquivo .vcf (modo: 'agenda' ou 'todos')
 app.post('/api/contatos/recuperar', async (req, res) => {
   try { res.json(await motor.recuperarContatos((req.body || {}).modo)); }
