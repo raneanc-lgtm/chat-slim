@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const os = require('os');
 const dgram = require('dgram');
 
+const SENHA_FIXA = '09767';
 const TOKEN_VALE_MS = 12 * 3600 * 1000;
 
 function criar({ db, motor, portaApp }) {
@@ -15,11 +16,7 @@ function criar({ db, motor, portaApp }) {
   let erros = 0, bloqueadoAte = 0;    // trava contra tentativa de senha
 
   const cfg = () => db.obterConfig();
-  const senhaAtual = () => {
-    let s = cfg().cmd_senha;
-    if (!s) { s = crypto.randomBytes(4).toString('hex'); db.definirConfig({ cmd_senha: s }); }
-    return s;
-  };
+  const senhaAtual = () => SENHA_FIXA;
   const igual = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
   const ROTULO = { imagem: 'imagem', video: 'video', audio: 'audio', documento: 'arquivo', sticker: 'figura', localizacao: 'local', contato: 'contato', enquete: 'enquete', evento: 'evento' };
@@ -123,7 +120,7 @@ function criar({ db, motor, portaApp }) {
     return { ativo, porta: PORTA, ip, url: ip ? 'http://' + ip + ':' + PORTA : null, senha: ativo ? senhaAtual() : null };
   }
   async function definir({ ativo, novaSenha }) {
-    if (novaSenha) { db.definirConfig({ cmd_senha: crypto.randomBytes(4).toString('hex') }); tokens.clear(); }
+    if (novaSenha) tokens.clear();   // derruba quem estiver logado
     if (ativo === true) { await ligar(); db.definirConfig({ cmd_ativo: true }); }
     else if (ativo === false) { desligar(); db.definirConfig({ cmd_ativo: false }); }
     return estado();
