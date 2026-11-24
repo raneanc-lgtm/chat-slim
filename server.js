@@ -11,6 +11,7 @@ const motor = require('./motor');
 const atualizador = require('./atualizador');
 const { webmParaOgg, ehWebm } = require('./audio-ogg');
 const db = require('./db');
+const cmd = require('./cmd').criar({ db, motor, portaApp: Number(process.env.CHATSLIM_PORTA) || 3000 });
 
 const app = express();
 const PORTA = Number(process.env.CHATSLIM_PORTA) || 3000;
@@ -397,6 +398,13 @@ app.post('/api/pareamento', async (req, res) => {
   }
 });
 
+// Modo "cmd" (usar o Zap no PC, em texto): ligar/desligar e ver endereço + senha
+app.get('/api/cmd', async (req, res) => { try { res.json(await cmd.estado()); } catch (e) { res.status(500).json({ erro: e.message }); } });
+app.post('/api/cmd', async (req, res) => {
+  try { res.json(await cmd.definir({ ativo: req.body && typeof req.body.ativo === 'boolean' ? req.body.ativo : undefined, novaSenha: !!(req.body && req.body.novaSenha) })); }
+  catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Status da conexão + QR code (como imagem base64)
 app.get('/api/status', async (req, res) => {
   const status = motor.getStatus();
@@ -435,6 +443,7 @@ app.listen(PORTA, '127.0.0.1', () => {
   console.log(`\n🚀 Chat Slim rodando! Abra no navegador: http://127.0.0.1:${PORTA}\n`);
   atualizador.marcarInicioOk(() => motor.enviosEmAndamento() === 0);
 });
+cmd.iniciar();
 
 motor.iniciar().catch((err) => {
   setTimeout(() => { try { motor.iniciarSeguro(); } catch (_) {} }, 3000);
