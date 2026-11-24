@@ -209,7 +209,7 @@ if(low==="cls"||low==="clear"){o.innerHTML="";return}
 if(low==="exit"){if(atual)voltar();else{o.innerHTML="";sair()}return}
 if(low==="cd .."||low==="cd.."||low==="cd\\"){voltar();return}
 if(!atual&&/^\d{1,3}$/.test(low)){var go2=function(){abrir(low)};if(!lista.length)carregar().then(go2).catch(function(e){out("Erro: "+e.message)});else go2();return}
-if(low==="dir"||low==="ls"){if(atual)voltar();dir();return}
+if(low==="dir"||low==="ls"){if(atual)voltar();o.innerHTML="";dir();return}
 if(low==="help"||low==="?"){ajuda();return}
 var m=/^(cd|open|abrir)\s+(.+)$/i.exec(s.trim());
 if(m){var go=function(){abrir(m[2].trim())};if(atual)voltar();if(!lista.length)carregar().then(go).catch(function(e){out("Erro: "+e.message)});else go();return}
