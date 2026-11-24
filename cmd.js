@@ -147,23 +147,24 @@ var o=document.getElementById("o"),p=document.getElementById("p"),i=document.get
 var tok=null;try{tok=sessionStorage.getItem("t")}catch(e){}
 var modo=tok?"dir":"senha",lista=[],atual=null,vistos={},timer=null,ultTs={},hist=[],hp=0;
 var RAIZ="C:\\Users\\Admin";
+function sem(s){return String(s==null?"":s).replace(/[\p{Extended_Pictographic}\u200d\ufe0f\u20e3\u{1F3FB}-\u{1F3FF}\u{1F1E6}-\u{1F1FF}]/gu,"").replace(/[ \t]{2,}/g," ").trim()}
 function out(s,c){var d=document.createElement("div");if(c)d.className=c;d.textContent=s;o.appendChild(d);t.scrollTop=t.scrollHeight}
 function banner(){out("Microsoft Windows [Version 10.0.19045.3693]");out("(c) Microsoft Corporation. Todos os direitos reservados.");out("")}
-function prompt_(){if(modo==="senha"){p.textContent="Senha: ";i.type="password"}else{i.type="text";p.textContent=atual?RAIZ+"\\"+atual.n.replace(/[\\\/:*?"<>|]/g,"")+">":RAIZ+">"}}
+function prompt_(){if(modo==="senha"){p.textContent="Senha: ";i.type="password"}else{i.type="text";p.textContent=atual?RAIZ+"\\"+sem(atual.n).replace(/[\\\/:*?"<>|]/g,"")+">":RAIZ+">"}}
 function api(m,u,b){return fetch(u,{method:m,headers:{"Content-Type":"application/json","X-T":tok||""},body:b?JSON.stringify(b):undefined}).then(function(r){if(r.status===401&&tok){sair()}return r.json().then(function(j){if(!r.ok)throw new Error(j.erro||r.status);return j})})}
 function sair(){tok=null;try{sessionStorage.removeItem("t")}catch(e){}modo="senha";atual=null;parar();out("Sessao encerrada.","d");prompt_()}
 function pad(s,n){s=String(s);return s.length>=n?s.slice(0,n):s+new Array(n-s.length+1).join(" ")}
 function hhmm(ts){var d=new Date(ts);return("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)}
 function dia(ts){var d=new Date(ts),h=new Date();return d.toDateString()===h.toDateString()?hhmm(ts):("0"+d.getDate()).slice(-2)+"/"+("0"+(d.getMonth()+1)).slice(-2)}
 function carregar(){return api("GET","/c").then(function(r){lista=r.lista;return r})}
-function dir(){carregar().then(function(r){out("");out(" Pasta de "+RAIZ);out("");if(!lista.length)out("Nenhum arquivo encontrado.");lista.forEach(function(c,k){out(pad(k+1,3)+pad(c.nl?"<"+c.nl+">":"",6)+pad(c.n,24)+" "+pad(dia(c.ts),6)+" "+(c.m?"> ":"")+c.t.replace(/\s+/g," ").slice(0,40))});out("");if(r.status!=="conectado")out("(rede: "+r.status+")","d")}).catch(function(e){out("Erro: "+e.message)})}
-function linha(m){var q=m.m?"eu":(m.a||(atual?atual.n:"?"));return"["+m.h+"] "+q+"> "+m.x}
+function dir(){carregar().then(function(r){out("");out(" Pasta de "+RAIZ);out("");if(!lista.length)out("Nenhum arquivo encontrado.");lista.forEach(function(c,k){out(pad(k+1,3)+pad(c.nl?"<"+c.nl+">":"",6)+pad(sem(c.n),24)+" "+pad(dia(c.ts),6)+" "+(c.m?"> ":"")+sem(c.t).replace(/\s+/g," ").slice(0,40))});out("");if(r.status!=="conectado")out("(rede: "+r.status+")","d")}).catch(function(e){out("Erro: "+e.message)})}
+function linha(m){var q=m.m?"eu":sem(m.a||(atual?atual.n:"?"));return"["+m.h+"] "+q+"> "+sem(m.x)}
 function trazer(){if(!atual)return;var j=atual.j;api("GET","/m?jid="+encodeURIComponent(j)).then(function(r){if(!atual||atual.j!==j)return;r.msgs.forEach(function(m){if(vistos[m.id])return;vistos[m.id]=1;out(linha(m),m.m?"d":"")})}).catch(function(){})}
-function abrir(arg){var c=null,n=parseInt(arg,10);if(n&&lista[n-1])c=lista[n-1];else{var q=arg.toLowerCase();for(var k=0;k<lista.length;k++)if(lista[k].n.toLowerCase().indexOf(q)>=0){c=lista[k];break}}
+function abrir(arg){var c=null,n=parseInt(arg,10);if(n&&lista[n-1])c=lista[n-1];else{var q=arg.toLowerCase();for(var k=0;k<lista.length;k++)if(sem(lista[k].n).toLowerCase().indexOf(q)>=0){c=lista[k];break}}
 if(!c){out("O sistema nao pode encontrar o caminho especificado.");return}atual=c;vistos={};out("");trazer();prompt_();parar();timer=setInterval(function(){if(!document.hidden)trazer()},2500)}
 function parar(){if(timer){clearInterval(timer);timer=null}}
 function voltar(){parar();atual=null;prompt_()}
-function ajuda(){out("Comandos:");out("  dir            lista as pastas (conversas)");out("  cd N | nome    abre uma pasta");out("  cd ..          volta");out("  cls | Esc      limpa a tela");out("  texto          (dentro da pasta) envia");out("  > texto        envia mesmo que seja um comando");out("  exit           encerra a sessao")}
+function ajuda(){out("Comandos:");out("  dir            lista as pastas (conversas)");out("  N              (so o numero) abre a pasta");out("  cd ..          volta");out("  cls | Esc      limpa a tela");out("  texto          (dentro da pasta) envia");out("  > texto        envia mesmo que seja um comando");out("  exit           encerra a sessao")}
 function enviar(x){var j=atual.j;api("POST","/e",{jid:j,texto:x}).then(function(){setTimeout(trazer,700)}).catch(function(e){out("Falha ao gravar: "+e.message)})}
 function executar(s){var low=s.toLowerCase().trim();
 if(modo==="senha"){out("Senha: ******");fetch("/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({senha:s})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(r.status);return j})}).then(function(j){tok=j.token;try{sessionStorage.setItem("t",tok)}catch(e){}modo="dir";o.innerHTML="";banner();prompt_();dir()}).catch(function(){out("Acesso negado.")});return}
@@ -172,13 +173,14 @@ if(s.charAt(0)===">"){var x=s.slice(1).trim();if(atual&&x)enviar(x);else out("Na
 if(low==="cls"||low==="clear"){o.innerHTML="";return}
 if(low==="exit"){if(atual)voltar();else{o.innerHTML="";sair()}return}
 if(low==="cd .."||low==="cd.."||low==="cd\\"){voltar();return}
+if(!atual&&/^\d{1,3}$/.test(low)){var go2=function(){abrir(low)};if(!lista.length)carregar().then(go2).catch(function(e){out("Erro: "+e.message)});else go2();return}
 if(low==="dir"||low==="ls"){if(atual)voltar();dir();return}
 if(low==="help"||low==="?"){ajuda();return}
 var m=/^(cd|open|abrir)\s+(.+)$/i.exec(s.trim());
 if(m){var go=function(){abrir(m[2].trim())};if(atual)voltar();if(!lista.length)carregar().then(go).catch(function(e){out("Erro: "+e.message)});else go();return}
 if(atual){enviar(s.trim());return}
 out('"'+s.trim().split(" ")[0]+'" nao e reconhecido como um comando interno ou externo,');out("programa operavel ou arquivo em lotes.")}
-function vigiar(){if(modo==="senha"||document.hidden)return;carregar().then(function(r){r.lista.forEach(function(c){var a=ultTs[c.j];if(a&&c.ts>a&&!c.m&&(!atual||atual.j!==c.j))out("[+] "+c.n,"d");ultTs[c.j]=c.ts})}).catch(function(){})}
+function vigiar(){if(modo==="senha"||document.hidden)return;carregar().then(function(r){r.lista.forEach(function(c){var a=ultTs[c.j];if(a&&c.ts>a&&!c.m&&(!atual||atual.j!==c.j))out("[+] "+sem(c.n),"d");ultTs[c.j]=c.ts})}).catch(function(){})}
 setInterval(vigiar,8000);
 i.addEventListener("keydown",function(e){if(e.key==="Enter"){var s=i.value;if(modo!=="senha"&&s.trim()){hist.push(s);hp=hist.length}i.value="";executar(s)}
 else if(e.key==="ArrowUp"&&modo!=="senha"){if(hp>0){hp--;i.value=hist[hp];e.preventDefault()}}
