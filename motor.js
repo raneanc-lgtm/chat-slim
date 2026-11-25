@@ -271,8 +271,22 @@ async function colherNome(m) {
   } catch (_) {}
 }
 
+// Visualização única: reconhece o embrulho (viewOnceMessage*, mesmo dentro de efêmera/dispositivo)
+// e a marca viewOnce da própria foto/vídeo/áudio. Nunca baixamos nem mostramos o conteúdo dessas.
+const EMBRULHOS_UNICA = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'];
+function ehVisualizacaoUnica(msg, nivel = 0) {
+  if (!msg || typeof msg !== 'object' || nivel > 5) return false;
+  for (const k of EMBRULHOS_UNICA) if (msg[k]) return true;
+  for (const k of ['imageMessage', 'videoMessage', 'audioMessage']) if (msg[k] && msg[k].viewOnce === true) return true;
+  for (const k of ['ephemeralMessage', 'deviceSentMessage', 'documentWithCaptionMessage', 'editedMessage']) {
+    if (msg[k] && ehVisualizacaoUnica(msg[k].message || msg[k], nivel + 1)) return true;
+  }
+  return false;
+}
+
 async function processarMensagem(m, tempoReal) {
   if (!m || !m.key) return;
+  if (m.message && !m.key.fromMe && ehVisualizacaoUnica(m.message) && m.key.remoteJid !== 'status@broadcast' && !m.broadcast) return processarVisualizacaoUnica(m, tempoReal);
   // Visualização única: o WhatsApp não entrega o conteúdo pra aparelhos conectados
   // (igual o WhatsApp Web, que manda abrir no celular). Registramos o aviso dela.
   if (!m.message && m.key.isViewOnce) return processarVisualizacaoUnica(m, tempoReal);
