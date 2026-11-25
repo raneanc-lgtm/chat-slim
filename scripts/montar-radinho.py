@@ -109,6 +109,54 @@ def main():
         open(main_smali, 'w', encoding='utf-8').write(s)
     print('✔ MainActivity do Radinho ligada ao Chat Slim')
 
+    # 4b) Rádio desligado = serviço do rádio parado (some o aviso "Em stand-by, esperando chamadas")
+    #     - Nativo.standby(''): sem canal ativo, para o RadioService em vez de só limpar a config
+    #     - MainActivity: só liga o RadioService ao abrir se houver canal ativo
+    nativo_smali = None
+    for raiz, _, arquivos in os.walk(rad):
+        if 'Nativo.smali' in arquivos and raiz.replace('\\', '/').endswith('com/slimcreative/cambio'):
+            nativo_smali = os.path.join(raiz, 'Nativo.smali')
+    if nativo_smali:
+        n = open(nativo_smali, encoding='utf-8').read()
+        m_sb = re.search(r'\.method public standby\(Ljava/lang/String;\)V.*?\.end method', n, re.S)
+        if m_sb and ':cond_parar' not in m_sb.group(0):
+            corpo = m_sb.group(0)
+            assert corpo.count('if-eqz v0, :cond_0') == 1, 'standby: estrutura inesperada'
+            corpo = corpo.replace('if-eqz v0, :cond_0', 'if-eqz v0, :cond_parar', 1)
+            bloco = (
+                '\n    :cond_parar\n'
+                '    :try_start_9\n'
+                '    iget-object v0, p0, Lcom/slimcreative/cambio/Nativo;->ctx:Landroid/content/Context;\n\n'
+                '    new-instance v1, Landroid/content/Intent;\n\n'
+                '    iget-object v2, p0, Lcom/slimcreative/cambio/Nativo;->ctx:Landroid/content/Context;\n\n'
+                '    const-class v3, Lcom/slimcreative/cambio/RadioService;\n\n'
+                '    invoke-direct {v1, v2, v3}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V\n\n'
+                '    invoke-virtual {v0, v1}, Landroid/content/Context;->stopService(Landroid/content/Intent;)Z\n'
+                '    :try_end_9\n'
+                '    .catch Ljava/lang/Throwable; {:try_start_9 .. :try_end_9} :catch_9\n\n'
+                '    goto :goto_0\n\n'
+                '    :catch_9\n'
+                '    move-exception v0\n\n'
+                '    goto :goto_0\n')
+            corpo = corpo[:corpo.rindex('.end method')] + bloco + '.end method'
+            n = n[:m_sb.start()] + corpo + n[m_sb.end():]
+            open(nativo_smali, 'w', encoding='utf-8').write(n)
+    s = open(main_smali, encoding='utf-8').read()
+    ini = re.search(r'(    :try_start_0\n    new-instance v1, Landroid/content/Intent;\n\n    const-class v2, Lcom/slimcreative/cambio/RadioService;)', s)
+    if ini and ':pula_radio' not in s:
+        check = ('    invoke-static {p0}, Lcom/slimcreative/cambio/Radar;->get(Landroid/content/Context;)Lcom/slimcreative/cambio/Radar;\n\n'
+                 '    move-result-object v1\n\n'
+                 '    invoke-virtual {v1}, Lcom/slimcreative/cambio/Radar;->ativo()Z\n\n'
+                 '    move-result v1\n\n'
+                 '    if-eqz v1, :pula_radio\n\n')
+        s = s[:ini.start()] + check + s[ini.start():]
+        i_c = s.index('    :catch_0\n    const/4 v1, 0x3', ini.start())
+        s = s[:i_c] + '    :pula_radio\n' + s[i_c:]
+        open(main_smali, 'w', encoding='utf-8').write(s)
+        print('✔ rádio desligado não mostra mais o aviso de stand-by')
+    else:
+        print('⚠ ponto de partida do RadioService não achado na MainActivity (aviso de stand-by não alterado)')
+
     # 5) Manifest
     mpath = os.path.join(rad, 'AndroidManifest.xml')
     m = open(mpath, encoding='utf-8').read()
