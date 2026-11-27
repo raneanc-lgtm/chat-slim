@@ -213,6 +213,11 @@ function definirNomeContato(jid, nome, fonte = 'perfil') {
   }
 }
 
+function temNomeAgenda(jid) {
+  const c = db.get('contatos').find({ jid }).value();
+  return !!(c && c.nome_agenda);
+}
+
 function nomeDoContato(jid) {
   const c = db.get('contatos').find({ jid }).value();
   if (c) {
@@ -688,6 +693,7 @@ module.exports = {
   listarConversas,
   marcarLidas,
   definirNomeContato,
+  temNomeAgenda,
   unificarLidsEmLote,
   limparNomeIgual,
   listarLids,

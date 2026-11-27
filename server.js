@@ -257,6 +257,13 @@ app.get('/api/backup/info', (req, res) => {
 // a tela avisa, depois de gravar no Downloads, pra guardar a data
 app.post('/api/backup/marcar', (req, res) => { try { db.definirConfig({ backup_em: Date.now() }); } catch (_) {} res.json({ ok: true }); });
 
+// Agenda do celular (lida pelo app): confere no WhatsApp e traz pra lista de contatos
+app.post('/api/contatos/importar-agenda', async (req, res) => {
+  try { res.json(await motor.importarAgenda((req.body || {}).lista)); }
+  catch (err) { res.status(500).json({ erro: err.message }); }
+});
+app.get('/api/contatos/importar-agenda', (req, res) => res.json(motor.statusImportacao()));
+
 // Pedir a agenda completa ao WhatsApp
 app.post('/api/sincronizar-contatos', async (req, res) => {
   try {

@@ -332,5 +332,60 @@ public final class Integracao {
                 return "";
             }
         }
+
+        /** true se o app já pode ler a agenda (sem pedir nada). */
+        @JavascriptInterface
+        public boolean agendaPermitida() {
+            try {
+                return Build.VERSION.SDK_INT < 23
+                        || act.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED;
+            } catch (Throwable e) { return false; }
+        }
+
+        /**
+         * Agenda do celular: JSON [{"n":"Nome","t":["+5531999990000", ...]}], ou "permissao" (pediu a
+         * permissão agora — chame de novo depois que a pessoa responder) ou "erro".
+         */
+        @JavascriptInterface
+        public String agendaCelular() {
+            try {
+                if (Build.VERSION.SDK_INT >= 23
+                        && act.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                    act.runOnUiThread(() -> act.requestPermissions(new String[]{android.Manifest.permission.READ_CONTACTS}, 7702));
+                    return "permissao";
+                }
+                java.util.LinkedHashMap<String, java.util.LinkedHashSet<String>> mapa = new java.util.LinkedHashMap<>();
+                android.database.Cursor c = act.getContentResolver().query(
+                        android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        new String[]{
+                                android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                                android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER},
+                        null, null, null);
+                if (c != null) {
+                    try {
+                        while (c.moveToNext()) {
+                            String nome = c.getString(0), num = c.getString(1);
+                            if (nome == null || num == null) continue;
+                            nome = nome.trim();
+                            num = num.trim();
+                            if (nome.isEmpty() || num.isEmpty()) continue;
+                            java.util.LinkedHashSet<String> l = mapa.get(nome);
+                            if (l == null) { l = new java.util.LinkedHashSet<>(); mapa.put(nome, l); }
+                            l.add(num);
+                        }
+                    } finally { c.close(); }
+                }
+                org.json.JSONArray arr = new org.json.JSONArray();
+                for (java.util.Map.Entry<String, java.util.LinkedHashSet<String>> e : mapa.entrySet()) {
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("n", e.getKey());
+                    o.put("t", new org.json.JSONArray(e.getValue()));
+                    arr.put(o);
+                }
+                return arr.toString();
+            } catch (Throwable e) {
+                return "erro";
+            }
+        }
     }
 }

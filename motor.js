@@ -969,6 +969,93 @@ function gerarVcf(modo, etapas) {
   return { arquivo, total: vistos.size, agenda, conhecidos: db.listarContatos().length, etapas: etapas || [] };
 }
 
+// ---- Agenda do celular → Zap ----
+// O app lê a agenda do Android e manda pra cá. Cada número é conferido no WhatsApp (em lotes
+// pequenos, com pausa, pra não parecer robô) e só quem TEM WhatsApp entra na lista, com o nome
+// que você salvou no celular. Nome que já veio da agenda do WhatsApp não é trocado.
+let importacao = { rodando: false, total: 0, feitos: 0, novos: 0, comWhats: 0, erro: null, fim: 0 };
+
+function numeroParaWhats(bruto) {
+  let t = String(bruto || '').trim();
+  const mais = t.startsWith('+');
+  let d = t.replace(/\D/g, '');
+  if (!d) return null;
+  if (!mais && d.startsWith('00')) d = d.slice(2);
+  else if (!mais && (d.length === 10 || d.length === 11)) d = '55' + d;          // DDD + número (Brasil)
+  else if (!mais && d.length === 12 && d.startsWith('0')) d = '55' + d.slice(1);
+  if (d.length < 10 || d.length > 15) return null;
+  if (d.startsWith('55') && d.length < 12) return null;
+  return d;
+}
+function variantesBR(d) {                      // o WhatsApp antigo no Brasil às vezes é sem o 9
+  const v = [d];
+  if (d.startsWith('55') && d.length === 13 && d[4] === '9') v.push(d.slice(0, 4) + d.slice(5));
+  if (d.startsWith('55') && d.length === 12) v.push(d.slice(0, 4) + '9' + d.slice(4));
+  return v;
+}
+
+function statusImportacao() { return { ...importacao }; }
+
+async function importarAgenda(lista) {
+  if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
+  if (importacao.rodando) return statusImportacao();
+  const porNumero = new Map();                 // número -> nome
+  for (const c of Array.isArray(lista) ? lista : []) {
+    const nome = String((c && c.n) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!nome) continue;
+    for (const t of (c.t || [])) {
+      const d = numeroParaWhats(t);
+      if (d && !porNumero.has(d)) porNumero.set(d, nome);
+    }
+  }
+  const numeros = [...porNumero.keys()];
+  importacao = { rodando: true, total: numeros.length, feitos: 0, novos: 0, comWhats: 0, erro: null, fim: 0 };
+  (async () => {
+    const sock = socketAtual;
+    let falhasSeguidas = 0;
+    try {
+      for (let i = 0; i < numeros.length; i += 30) {
+        if (socketAtual !== sock || statusConexao !== 'conectado') throw new Error('a conexão caiu no meio — toque de novo pra continuar');
+        const lote = numeros.slice(i, i + 30);
+        const dono = new Map();                // variante -> número original
+        lote.forEach((n) => variantesBR(n).forEach((v) => { if (!dono.has(v)) dono.set(v, n); }));
+        let res = [];
+        try {
+          res = (await comLimite(sock.onWhatsApp(...[...dono.keys()].map((v) => v + '@s.whatsapp.net')), 20000)) || [];
+          falhasSeguidas = 0;
+        } catch (e) {
+          if (++falhasSeguidas >= 3) throw new Error('o WhatsApp parou de responder (' + e.message + ')');
+          await new Promise((r) => setTimeout(r, 4000));
+          i -= 30; continue;                   // tenta o mesmo lote de novo
+        }
+        const vistos = new Set();
+        for (const r of res) {
+          if (!r || !r.exists) continue;
+          const user = String(r.jid || '').split('@')[0].split(':')[0];
+          const orig = dono.get(user);
+          if (!orig || vistos.has(orig)) continue;
+          vistos.add(orig);
+          let jid = normalizar(r.jid || '');
+          try { jid = await paraNumero(jid, null); } catch (_) {}
+          if (!jid.endsWith('@s.whatsapp.net')) jid = orig + '@s.whatsapp.net';
+          importacao.comWhats++;
+          if (!db.temNomeAgenda(jid)) { db.definirNomeContato(jid, porNumero.get(orig), 'agenda'); importacao.novos++; }
+        }
+        importacao.feitos = Math.min(numeros.length, i + 30);
+        await new Promise((r) => setTimeout(r, 1500 + Math.floor(Math.random() * 1000)));
+      }
+      emitir({ tipo: 'conversas' });
+    } catch (e) {
+      importacao.erro = e.message;
+      console.error('[agenda] ' + e.message);
+    } finally {
+      importacao.rodando = false; importacao.fim = Date.now();
+      console.log('[agenda] ' + importacao.comWhats + ' com WhatsApp, ' + importacao.novos + ' novos, de ' + importacao.total + ' números');
+    }
+  })();
+  return statusImportacao();
+}
+
 // ---- Agenda completa (pede ao WhatsApp a sincronização dos contatos) ----
 async function sincronizarContatos() {
   if (!socketAtual || statusConexao !== 'conectado') throw new Error('WhatsApp não está conectado');
@@ -1479,6 +1566,10 @@ async function enviarMensagem(jid, texto, citadaId) {
 
 module.exports = {
   recuperarContatos,
+  importarAgenda,
+  statusImportacao,
+  numeroParaWhats,
+  variantesBR,
   enviarEspecial,
   transcreverAudio,
   recusarChamada,

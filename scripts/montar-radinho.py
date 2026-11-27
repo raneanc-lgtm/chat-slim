@@ -209,8 +209,8 @@ def main():
     # serviço em primeiro plano do motor (recebe mensagens em segundo plano quando "Manter aberto" está ligado)
     if 'FOREGROUND_SERVICE_SPECIAL_USE' not in m:
         m = m.replace('<application ', '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>\n    <application ', 1)
-    # localização (anexo "Localização" do Zap)
-    for pp in ('ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION'):
+    # localização (anexo "Localização" do Zap) e agenda do celular (importar contatos pro Zap)
+    for pp in ('ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'READ_CONTACTS'):
         if pp not in m:
             m = m.replace('<application ', '<uses-permission android:name="android.permission.' + pp + '"/>\n    <application ', 1)
     if a.teste:
